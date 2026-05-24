@@ -64,3 +64,24 @@ def remove_all_members(client: BridgeClient, group: str, *,
     return client.request("group/members/remove_all", payload={
         "group": group,
     }, timeout=timeout)
+
+
+def options(client: BridgeClient, id_: str, options_payload: dict, *,
+            timeout: float = 10.0) -> dict:
+    """Set group-level options (transition, retain, etc.).
+
+    Mirrors :func:`devices.options` for groups. Common keys:
+
+    * ``transition`` — default transition (seconds) for state changes
+    * ``off_state`` — ``"last_state"`` | ``"all_state"``
+    * ``retain`` — retain published state messages
+
+    *id_* is the group's friendly_name or numeric id.
+    """
+    if not id_:
+        raise ValueError("id_ is required (group friendly_name or numeric id)")
+    if not isinstance(options_payload, dict):
+        raise ValueError("options_payload must be a dict")
+    return client.request("group/options", payload={
+        "id": id_, "options": options_payload,
+    }, timeout=timeout)

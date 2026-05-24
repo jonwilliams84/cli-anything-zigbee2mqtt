@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, group management, OTA firmware updates, permit-join, network map, touchlink, and external-converter file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, direct bind/unbind + bindings inspection, last-seen staleness sweeps, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -38,11 +38,13 @@ Two external deps:
 | Group | Examples |
 |---|---|
 | `bridge` | `bridge info`, `bridge state`, `bridge restart`, `bridge restart --via-kubectl`, `bridge health`, `bridge options-get`, `bridge options-set '{"advanced":{"log_level":"info"}}'`, `bridge watch-events --duration 30`, `bridge watch-logging --duration 10` |
-| `device` | `device list`, `device list --full`, `device show <name>`, `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10` |
-| `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>` |
+| `device` | `device list`, `device list --full`, `device show <name>`, `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]` |
+| `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'` |
 | `ota` | `ota check <name>`, `ota update <name>`, `ota schedule <name>` |
 | `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup` |
+| `install-code` | `install-code add <QR-text>`, `install-code remove <QR-text>` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `converter list`, `converter show <name.js>`, `converter add <name.js> ./local.js`, `converter remove <name.js>` |
+| `extension` | `extension list`, `extension show <name.js>`, `extension save <name.js> ./local.js`, `extension remove <name.js>` — z2m extensions (deeper than converters) via MQTT |
 | `config` | `config show`, `config save` |
 | `repl` | Interactive shell (default with no subcommand) |
 
@@ -104,4 +106,61 @@ cli-anything-zigbee2mqtt converter add zy-m100-fix.js ./zy-m100-fix.js
 cli-anything-zigbee2mqtt bridge restart --via-kubectl
 # Verify the overridden discovery is published:
 cli-anything-zigbee2mqtt --json device show <name> | jq '.definition.exposes'
+```
+
+### Onboard an unsupported device — generate a starter converter
+
+```bash
+# Pair the device first (no support → state is just raw cluster reads).
+cli-anything-zigbee2mqtt network permit-join on --time 120
+# After pairing, ask z2m to write a starter converter from the interview data:
+cli-anything-zigbee2mqtt device generate-converter <auto-name> -o new-device.js
+# Edit new-device.js, then push it:
+cli-anything-zigbee2mqtt converter add new-device.js ./new-device.js
+cli-anything-zigbee2mqtt bridge restart
+```
+
+### Direct device-to-device binding (sub-100ms switch → light)
+
+```bash
+# Bind a wall switch to a bulb so the switch works even when z2m is down
+cli-anything-zigbee2mqtt device bind switch_kitchen light_kitchen \
+  --cluster genOnOff --cluster genLevelCtrl
+
+# Inspect every binding in the network
+cli-anything-zigbee2mqtt --json device bindings | jq '.'
+
+# Or just one device
+cli-anything-zigbee2mqtt device bindings switch_kitchen
+
+# Remove it
+cli-anything-zigbee2mqtt device unbind switch_kitchen light_kitchen
+```
+
+### Find dead devices
+
+```bash
+# Anything that hasn't spoken in 6 hours, sorted oldest-first
+cli-anything-zigbee2mqtt --json device stale --threshold 360 | jq '.[].friendly_name'
+
+# Quick check on the one device you care about
+cli-anything-zigbee2mqtt device state sensor_balcony
+```
+
+### Fix wrong reporting intervals
+
+```bash
+# A battery temperature sensor reporting every 30s drains in a week —
+# slow it down without re-interviewing.
+cli-anything-zigbee2mqtt device configure-reporting balcony-temp \
+  --cluster msTemperatureMeasurement --attribute measuredValue \
+  --min 300 --max 1800 --change 0.5
+```
+
+### Onboard a join-code-protected device (Bosch, some Aqara)
+
+```bash
+cli-anything-zigbee2mqtt install-code add "G$M001 1234ABCD..."
+cli-anything-zigbee2mqtt network permit-join on --time 120
+# Now put the device in pairing mode.
 ```

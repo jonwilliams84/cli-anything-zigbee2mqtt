@@ -11,10 +11,13 @@ import click
 
 from cli_anything.zigbee2mqtt.core import (
     admin,
+    bindings as bindings_core,
     bridge as bridge_core,
     converters as converters_core,
     devices as devices_core,
+    extensions as extensions_core,
     groups as groups_core,
+    install_code as install_code_core,
     k8s_backend,
     ota as ota_core,
     project,
@@ -411,6 +414,149 @@ def device_watch(ctx, friendly_name, duration):
         emit(ctx, devices_core.watch_device(c, friendly_name, duration=duration))
 
 
+@device.command("state")
+@click.argument("friendly_name")
+@click.option("--timeout", default=3.0, type=float,
+              help="Seconds to wait for the retained payload (default 3)")
+@click.pass_context
+def device_state(ctx, friendly_name, timeout):
+    """Read the device's last retained state payload (one-shot)."""
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.read_state(c, friendly_name, timeout=timeout))
+
+
+@device.command("stale")
+@click.option("--threshold", "threshold_minutes", default=60, type=int,
+              show_default=True,
+              help="Minimum minutes since last_seen to include")
+@click.option("--no-routers", is_flag=True, default=False,
+              help="Skip mains-powered routers (focus on battery devices)")
+@click.option("--no-end-devices", is_flag=True, default=False,
+              help="Skip end devices (e.g. only check infrastructure)")
+@click.pass_context
+def device_stale(ctx, threshold_minutes, no_routers, no_end_devices):
+    """Rank devices by how long they've been silent (last_seen)."""
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.find_stale(
+            c,
+            threshold_minutes=threshold_minutes,
+            include_routers=not no_routers,
+            include_end_devices=not no_end_devices,
+        ))
+
+
+@device.command("generate-converter")
+@click.argument("ident")
+@click.option("--output", "-o", "output_path", default=None,
+              type=click.Path(dir_okay=False, writable=True),
+              help="Write the generated .js to this path (else print to stdout)")
+@click.option("--overwrite", is_flag=True, default=False,
+              help="Replace --output if it exists")
+@click.pass_context
+def device_generate_converter(ctx, ident, output_path, overwrite):
+    """Ask z2m to emit a starter external-converter .js for IDENT.
+
+    IDENT is a friendly_name or ieee_address. Pair with `converter add`
+    to drop the generated file into z2m's external_converters/.
+    """
+    import os
+    with make_client(ctx) as c:
+        resp = devices_core.generate_external_definition(c, ident)
+    source = resp.get("source") if isinstance(resp, dict) else None
+    if not source:
+        emit(ctx, resp)
+        return
+    if output_path:
+        if os.path.exists(output_path) and not overwrite:
+            _abort(f"{output_path} already exists (--overwrite to replace)")
+        with open(output_path, "w", encoding="utf-8") as fh:
+            fh.write(source)
+        emit(ctx, {
+            "saved": output_path,
+            "bytes": len(source.encode("utf-8")),
+            "model": resp.get("model"),
+        })
+    else:
+        click.echo(source)
+
+
+@device.command("configure-reporting")
+@click.argument("ident")
+@click.option("--cluster", required=True,
+              help="zigbee-herdsman cluster name, e.g. genOnOff, msTemperatureMeasurement")
+@click.option("--attribute", required=True,
+              help="Attribute id within the cluster (e.g. measuredValue, batteryPercentageRemaining)")
+@click.option("--min", "min_interval", type=int, required=True,
+              help="Minimum seconds between reports")
+@click.option("--max", "max_interval", type=int, required=True,
+              help="Maximum seconds between reports (0 to disable)")
+@click.option("--change", "reportable_change", type=float, default=None,
+              help="Reportable change in native units (omit for boolean attrs)")
+@click.option("--endpoint", type=int, default=None,
+              help="Endpoint id (default lets z2m pick based on cluster)")
+@click.pass_context
+def device_configure_reporting(ctx, ident, cluster, attribute, min_interval,
+                                  max_interval, reportable_change, endpoint):
+    """Manually configure attribute reporting on a device endpoint."""
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.configure_reporting(
+            c,
+            id_=ident, cluster=cluster, attribute=attribute,
+            minimum_report_interval=min_interval,
+            maximum_report_interval=max_interval,
+            reportable_change=reportable_change,
+            endpoint=endpoint,
+        ))
+
+
+@device.command("bind")
+@click.argument("from_")
+@click.argument("to")
+@click.option("--cluster", "clusters", multiple=True,
+              help="Cluster to bind (repeatable). Omit to let z2m bind every common cluster")
+@click.pass_context
+def device_bind(ctx, from_, to, clusters):
+    """Bind FROM endpoint to TO endpoint (or to a group).
+
+    FROM / TO are friendly_name or ieee_address, optionally with `/N`
+    suffix for endpoint id. TO may be a group friendly_name.
+    """
+    with make_client(ctx) as c:
+        emit(ctx, bindings_core.bind(
+            c, from_=from_, to=to,
+            clusters=list(clusters) if clusters else None,
+        ))
+
+
+@device.command("unbind")
+@click.argument("from_")
+@click.argument("to")
+@click.option("--cluster", "clusters", multiple=True,
+              help="Cluster to unbind (repeatable). Omit to remove every common cluster")
+@click.pass_context
+def device_unbind(ctx, from_, to, clusters):
+    """Remove the binding FROM ⇒ TO."""
+    with make_client(ctx) as c:
+        emit(ctx, bindings_core.unbind(
+            c, from_=from_, to=to,
+            clusters=list(clusters) if clusters else None,
+        ))
+
+
+@device.command("bindings")
+@click.argument("ident", required=False, default=None)
+@click.pass_context
+def device_bindings(ctx, ident):
+    """List bindings (all devices, or just IDENT if given).
+
+    Computed locally from the retained `bridge/devices` payload — no
+    extra round trip. Each row gives source endpoint, cluster, and the
+    target endpoint or group.
+    """
+    with make_client(ctx) as c:
+        emit(ctx, bindings_core.list_bindings(c, device_ident=ident))
+
+
 # ──────────────────────────────────────────────────────── groups
 
 @cli.group()
@@ -483,6 +629,25 @@ def group_remove_member(ctx, group_name, device_name, skip_disable_reporting):
 def group_remove_all(ctx, group_name):
     with make_client(ctx) as c:
         emit(ctx, groups_core.remove_all_members(c, group_name))
+
+
+@group.command("options")
+@click.argument("group_name")
+@click.argument("options_json")
+@click.pass_context
+def group_options(ctx, group_name, options_json):
+    """Set group-level options (transition / retain / off_state).
+
+    OPTIONS_JSON is a JSON object, e.g. '{"transition": 1.5, "retain": true}'.
+    """
+    try:
+        opts = json.loads(options_json)
+    except json.JSONDecodeError as exc:
+        _abort(f"--options must be a JSON object: {exc}")
+    if not isinstance(opts, dict):
+        _abort("options must be a JSON object")
+    with make_client(ctx) as c:
+        emit(ctx, groups_core.options(c, group_name, opts))
 
 
 # ──────────────────────────────────────────────────────── ota
@@ -634,6 +799,84 @@ def converter_add(ctx, name, local_path, no_backup):
 def converter_remove(ctx, name, no_backup):
     target = make_k8s_target(ctx)
     emit(ctx, converters_core.remove(target, name, backup=not no_backup))
+
+
+# ──────────────────────────────────────────────────────── install codes
+
+@cli.group("install-code")
+def install_code_grp():
+    """Pre-register install codes for join-code-protected devices."""
+
+
+@install_code_grp.command("add")
+@click.argument("value")
+@click.pass_context
+def install_code_add(ctx, value):
+    """Add an install code (QR-code text or `ieee:install_code` pair)."""
+    with make_client(ctx) as c:
+        emit(ctx, install_code_core.add(c, value))
+
+
+@install_code_grp.command("remove")
+@click.argument("value")
+@click.confirmation_option(prompt="Remove this install code?")
+@click.pass_context
+def install_code_remove(ctx, value):
+    """Remove a previously-added install code."""
+    with make_client(ctx) as c:
+        emit(ctx, install_code_core.remove(c, value))
+
+
+# ──────────────────────────────────────────────────────── extensions
+
+@cli.group()
+def extension():
+    """z2m external extensions (JS) — list / show / save / remove via MQTT."""
+
+
+@extension.command("list")
+@click.pass_context
+def extension_list(ctx):
+    """List every extension z2m has loaded (retained bridge/extensions)."""
+    with make_client(ctx) as c:
+        emit(ctx, extensions_core.list_extensions(c))
+
+
+@extension.command("show")
+@click.argument("name")
+@click.pass_context
+def extension_show(ctx, name):
+    """Print the source code of one extension."""
+    with make_client(ctx) as c:
+        ext = extensions_core.show(c, name)
+    if not ext:
+        _abort(f"no extension named {name!r}")
+    if ctx.obj.get("as_json"):
+        emit(ctx, ext)
+    else:
+        click.echo(ext.get("code") or "")
+
+
+@extension.command("save")
+@click.argument("name")
+@click.argument("local_path", type=click.Path(exists=True, dir_okay=False))
+@click.pass_context
+def extension_save(ctx, name, local_path):
+    """Upload a local .js file as an extension."""
+    with make_client(ctx) as c:
+        emit(ctx, extensions_core.save_from_file(
+            c, name=name, local_path=local_path,
+        ))
+
+
+@extension.command("remove")
+@click.argument("name")
+@click.confirmation_option(prompt="Remove this extension?")
+@click.pass_context
+def extension_remove(ctx, name):
+    """Remove an extension by name."""
+    with make_client(ctx) as c:
+        emit(ctx, extensions_core.remove(c, name))
 
 
 # ──────────────────────────────────────────────────────── REPL

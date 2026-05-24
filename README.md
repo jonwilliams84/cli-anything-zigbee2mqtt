@@ -38,11 +38,13 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | Group | Examples |
 |---|---|
 | `bridge` | `info / state / restart / health / options-get / options-set / watch-events / watch-logging` |
-| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch` |
-| `group` | `list / add / remove / rename / add-member / remove-member / remove-all` |
+| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / generate-converter / configure-reporting / bind / unbind / bindings` |
+| `group` | `list / add / remove / rename / add-member / remove-member / remove-all / options` |
 | `ota` | `check / update / schedule` |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup` |
+| `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `list / show / add / remove` — manages `data/external_converters/*.js` via kubectl |
+| `extension` | `list / show / save / remove` — z2m extensions (deeper than converters); managed entirely over MQTT |
 | `config` | `show / save` (local connection profile) |
 | `repl` | Interactive shell (default with no subcommand) |
 
@@ -80,6 +82,22 @@ cli-anything-zigbee2mqtt --json network map --type graphviz
 cli-anything-zigbee2mqtt converter list
 cli-anything-zigbee2mqtt converter add my-override.js ./my-override.js
 cli-anything-zigbee2mqtt bridge restart --via-kubectl
+
+# v0.2.0 refine surface
+cli-anything-zigbee2mqtt device state 'Lounge Lamp'         # one-shot retained
+cli-anything-zigbee2mqtt --json device stale --threshold 360 # >6h silent
+cli-anything-zigbee2mqtt device generate-converter <name> -o new-device.js
+cli-anything-zigbee2mqtt device configure-reporting <name> \
+  --cluster msTemperatureMeasurement --attribute measuredValue \
+  --min 300 --max 1800 --change 0.5
+cli-anything-zigbee2mqtt device bind switch_kitchen light_kitchen \
+  --cluster genOnOff
+cli-anything-zigbee2mqtt --json device bindings
+cli-anything-zigbee2mqtt group options kitchen-lights \
+  '{"transition":1.5,"retain":true}'
+cli-anything-zigbee2mqtt install-code add "QR-CODE-TEXT-HERE"
+cli-anything-zigbee2mqtt extension list
+cli-anything-zigbee2mqtt extension save my-ext.js ./my-ext.js
 ```
 
 ## Architecture
@@ -91,10 +109,15 @@ cli_anything/zigbee2mqtt/
 │   ├── mqtt_client.py      # BridgeClient — MQTT request/response correlation
 │   ├── bridge.py           # info/state/restart/health/options/watch
 │   ├── devices.py          # list/show/rename/remove/configure/interview/set/get
-│   ├── groups.py           # group CRUD + membership
+│   │                       # + state (retained one-shot) / stale / generate-converter
+│   │                       # / configure-reporting
+│   ├── bindings.py         # device/bind, device/unbind, list_bindings (local)
+│   ├── groups.py           # group CRUD + membership + options
 │   ├── ota.py              # OTA check / update / schedule
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
-│   ├── converters.py       # external_converters/ file mgmt
+│   ├── converters.py       # external_converters/ file mgmt (kubectl)
+│   ├── extensions.py       # extension save/remove/list/show (MQTT)
+│   ├── install_code.py     # install_code/add / remove
 │   ├── k8s_backend.py      # kubectl helpers
 │   └── project.py          # local connection profile
 └── utils/
@@ -112,8 +135,10 @@ filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-10 unit tests exercise the BridgeClient against a fake MQTT transport — no
-broker needed.
+57 unit tests cover the BridgeClient (against a fake MQTT transport), every
+mutator in bindings / install_code / extensions / groups.options, and the
+read-side helpers in devices.py (read_state / find_stale /
+generate_external_definition / configure_reporting). No broker needed.
 
 ## License
 
