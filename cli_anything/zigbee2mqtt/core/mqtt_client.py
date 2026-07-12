@@ -51,8 +51,6 @@ class BridgeClient:
         self.host = host
         self.port = port
         self.base_topic = base_topic.rstrip("/")
-        self._username = username
-        self._password = password
         self.client_id = client_id or f"cli-anything-z2m-{uuid.uuid4().hex[:8]}"
         self.keepalive = keepalive
         self.client = mqtt.Client(client_id=self.client_id)
@@ -143,7 +141,7 @@ class BridgeClient:
         topic = msg.topic
         try:
             payload = msg.payload.decode("utf-8", errors="replace")
-        except Exception:
+        except UnicodeDecodeError:
             payload = ""
         # bridge response handling
         prefix = f"{self.base_topic}/bridge/response/"
@@ -163,10 +161,7 @@ class BridgeClient:
         # general subscriber dispatch
         for filt, cb in list(self._subscribers):
             if mqtt.topic_matches_sub(filt, topic):
-                try:
-                    cb(topic, payload)
-                except Exception:
-                    pass
+                cb(topic, payload)
 
     # ── generic publish / subscribe ─────────────────────────────────────
 

@@ -1,0 +1,56 @@
+diff --git a/cli_anything/zigbee2mqtt/core/mqtt_client.py b/cli_anything/zigbee2mqtt/core/mqtt_client.py
+index d289f58..746cda9 100644
+--- a/cli_anything/zigbee2mqtt/core/mqtt_client.py
++++ b/cli_anything/zigbee2mqtt/core/mqtt_client.py
+@@ -51,8 +51,6 @@ class BridgeClient:
+         self.host = host
+         self.port = port
+         self.base_topic = base_topic.rstrip("/")
+-        self._username = username
+-        self._password = password
+         self.client_id = client_id or f"cli-anything-z2m-{uuid.uuid4().hex[:8]}"
+         self.keepalive = keepalive
+         self.client = mqtt.Client(client_id=self.client_id)
+@@ -143,7 +141,7 @@ class BridgeClient:
+         topic = msg.topic
+         try:
+             payload = msg.payload.decode("utf-8", errors="replace")
+-        except Exception:
++        except UnicodeDecodeError:
+             payload = ""
+         # bridge response handling
+         prefix = f"{self.base_topic}/bridge/response/"
+@@ -163,15 +161,13 @@ class BridgeClient:
+         # general subscriber dispatch
+         for filt, cb in list(self._subscribers):
+             if mqtt.topic_matches_sub(filt, topic):
+-                try:
+-                    cb(topic, payload)
+-                except Exception:
+-                    pass
++                cb(topic, payload)
+ 
+     # ── generic publish / subscribe ─────────────────────────────────────
+ 
+     def publish(self, topic: str, payload: Any, *, retain: bool = False,
+                  qos: int = 0) -> int:
++        """Publish a message to the specified topic."""
+         if not self._connected:
+             self.connect()
+         if isinstance(payload, (dict, list)):
+@@ -187,6 +183,7 @@ class BridgeClient:
+         return info.rc
+ 
+     def subscribe(self, filter_: str, callback: Callable[[str, str], None]) -> None:
++        """Subscribe to a topic filter and register a callback."""
+         if not self._connected:
+             self.connect()
+         self.client.subscribe(filter_, qos=0)
+@@ -204,6 +201,7 @@ class BridgeClient:
+         def _cb(_t, p):
+             slot["payload"] = p
+             event.set()
++
+         self.subscribe(topic, _cb)
+         event.wait(timeout=timeout)
+         return slot.get("payload")
