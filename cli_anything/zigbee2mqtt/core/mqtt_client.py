@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -204,6 +203,15 @@ class BridgeClient:
         def _cb(_t, p):
             slot["payload"] = p
             event.set()
-        self.subscribe(topic, _cb)
+        
+        # Crucially, register the callback in our internal dispatcher 
+        # BEFORE calling the MQTT client's subscribe. This ensures that 
+        # if the retained message arrives immediately upon subscription 
+        # (which can happen synchronously in some client/broker setups), 
+        # the callback is already ready to handle it.
+        with self._lock:
+            self._subscribers.append((topic, _cb))
+        
+        self.client.subscribe(topic, qos=0)
         event.wait(timeout=timeout)
         return slot.get("payload")

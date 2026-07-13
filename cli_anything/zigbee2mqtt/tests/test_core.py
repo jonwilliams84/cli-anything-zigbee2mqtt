@@ -94,6 +94,7 @@ class FakeMqttClient:
         self._connected = False
         self._loop_thread = None
         self._stop = threading.Event()
+        self._retained_payloads: dict = {}
 
     def username_pw_set(self, u, p=None):
         self.username, self.password = u, p
@@ -242,3 +243,43 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── collect_retained ────────────────────────────────────────────────────────
+class TestCollectRetained:
+    def test_collect_retained_returns_payload(self, fake_paho):
+        """collect_retained receives a retained message and returns it immediately."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        # FakeMqttClient.subscribe does NOT auto-deliver retained payloads.
+        # We must patch it *only* for this test to simulate real-broker behaviour.
+        _orig_sub = FakeMqttClient.subscribe
+
+        def _deliver_on_subscribe(self, topic, qos=0):
+            self.subscriptions.append(topic)
+            # Only intercept if this FakeMqttClient has been seeded with retained data.
+            if hasattr(self, '_retained_payloads'):
+                payload = self._retained_payloads.get(topic)
+                if payload is not None:
+                    class _Msg:
+                        def __init__(self):
+                            self.topic = topic
+                            self.payload = payload.encode()
+                    self.on_message(self, None, _Msg())
+
+        FakeMqttClient.subscribe = _deliver_on_subscribe
+        try:
+            c = BridgeClient('fake-host', base_topic='z2m')
+            with c as client:
+                client.client._retained_payloads['z2m/bridge/info'] = '{"version":"1.0"}'
+                result = client.collect_retained('z2m/bridge/info', timeout=1.0)
+                assert result == '{"version":"1.0"}'
+        finally:
+            FakeMqttClient.subscribe = _orig_sub
+
+    def test_collect_retained_times_out_and_returns_none(self, fake_paho):
+        """collect_retained returns None when no retained message arrives."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient('fake-host', base_topic='z2m')
+        with c as client:
+            result = client.collect_retained('z2m/never/arrive', timeout=0.1)
+        assert result is None
