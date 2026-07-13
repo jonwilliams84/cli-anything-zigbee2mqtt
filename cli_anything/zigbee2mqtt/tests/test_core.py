@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import threading
+import pathlib
 import time
 import pytest
 
@@ -242,3 +243,21 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── import cleanliness ────────────────────────────────────────────────────────
+
+    def test_mqtt_client_no_unused_imports(self):
+        """Regression: mqtt_client.py must not import unused stdlib modules.
+
+        The CONFIRMED finding was 'time' — it was imported but never used.
+        This test verifies the import is gone and stays gone.
+        """
+        src = pathlib.Path(__file__).parent.parent / "core" / "mqtt_client.py"
+        text = src.read_text()
+
+        # time was the CONFIRMED finding (now removed)
+        assert "import time" not in text, \
+            r"\ found in mqtt_client.py — unused import must be removed"
+        assert "from time import" not in text, \
+            r"\ found in mqtt_client.py — unused import must be removed"
