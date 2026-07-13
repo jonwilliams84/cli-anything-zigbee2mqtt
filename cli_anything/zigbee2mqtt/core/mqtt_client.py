@@ -142,8 +142,8 @@ class BridgeClient:
     def _on_message(self, _client, _ud, msg):
         topic = msg.topic
         try:
-            payload = msg.payload.decode("utf-8", errors="replace")
-        except Exception:
+            payload = msg.payload.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
             payload = ""
         # bridge response handling
         prefix = f"{self.base_topic}/bridge/response/"
@@ -166,7 +166,7 @@ class BridgeClient:
                 try:
                     cb(topic, payload)
                 except Exception:
-                    pass
+                    raise
 
     # ── generic publish / subscribe ─────────────────────────────────────
 

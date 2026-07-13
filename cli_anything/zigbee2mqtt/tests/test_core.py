@@ -242,3 +242,66 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+
+
+# ── Regression: _on_message decode / exception handling ──────────────────────
+
+class TestOnMessageDecode:
+    """Regression: BridgeClient._on_message must not swallow unrelated exceptions."""
+
+    def test_unicode_decode_error_in_payload_returns_empty_string(self, fake_paho):
+        """payload.decode() raises UnicodeDecodeError on non-UTF-8 bytes.
+
+        The handler must catch it and fall back to '' so the message-loop
+        keeps running rather than crashing the MQTT thread.
+        """
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+        c = BridgeClient("localhost", client_id="test")
+        c._connected = True
+
+        received = []
+        c._subscribers.append(("zigbee2mqtt/+/set", lambda t, p: received.append((t, p))))
+
+        # paho.mqtt gives msg.topic as str and msg.payload as bytes
+        # Simulate non-UTF-8 payload bytes that trigger UnicodeDecodeError
+        class FakeMsg:
+            def __init__(self, topic_str, payload_bytes):
+                self.topic = topic_str
+                self.payload = payload_bytes
+
+        # b'\xff\xfe\xfd' is invalid UTF-8 — decode() raises UnicodeDecodeError
+        bad_msg = FakeMsg("zigbee2mqtt/sensor1/set", b"\xff\xfe\xfd")
+        # Must not raise — UnicodeDecodeError must be caught internally
+        c._on_message(None, None, bad_msg)
+
+        # Subscriber gets empty string as fallback
+        assert received == [("zigbee2mqtt/sensor1/set", "")]
+
+    def test_exception_in_subscriber_callback_propagates(self, fake_paho):
+        """Exceptions raised by subscriber callbacks must propagate.
+
+        Silent `except Exception: pass` in _on_message hides bugs in user callbacks.
+        The handler must let them bubble up so they are visible to callers.
+        """
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+        c = BridgeClient("localhost", client_id="test")
+        c._connected = True
+
+        def bad_callback(topic, payload):
+            raise RuntimeError("boom from callback")
+
+        c._subscribers.append(("zigbee2mqtt/x", bad_callback))
+
+        class FakeMsg:
+            def __init__(self, topic_str, payload_bytes):
+                self.topic = topic_str
+                self.payload = payload_bytes
+
+        msg = FakeMsg("zigbee2mqtt/x", b"data")
+        # RuntimeError from the callback must NOT be silently swallowed
+        with pytest.raises(RuntimeError, match="boom from callback"):
+            c._on_message(None, None, msg)
