@@ -161,7 +161,9 @@ class BridgeClient:
                     pending["event"].set()
                     return
         # general subscriber dispatch
-        for filt, cb in list(self._subscribers):
+        with self._lock:
+            current_subs = list(self._subscribers)
+        for filt, cb in current_subs:
             if mqtt.topic_matches_sub(filt, topic):
                 try:
                     cb(topic, payload)
@@ -182,15 +184,16 @@ class BridgeClient:
             body = str(payload)
         else:
             body = "" if payload is None else str(payload)
+
         info = self.client.publish(topic, body, qos=qos, retain=retain)
-        info.wait_for_publish(timeout=5)
         return info.rc
 
     def subscribe(self, filter_: str, callback: Callable[[str, str], None]) -> None:
         if not self._connected:
             self.connect()
         self.client.subscribe(filter_, qos=0)
-        self._subscribers.append((filter_, callback))
+        with self._lock:
+            self._subscribers.append((filter_, callback))
 
     def collect_retained(self, topic: str, *, timeout: float = 5.0) -> Optional[str]:
         """One-shot: subscribe, wait for the retained message on `topic`, return payload.
@@ -204,6 +207,10 @@ class BridgeClient:
         def _cb(_t, p):
             slot["payload"] = p
             event.set()
+            with self._lock:
+                # Remove this one-shot callback
+                self._subscribers = [s for s in self._subscribers if s[1] is not _cb]
+
         self.subscribe(topic, _cb)
         event.wait(timeout=timeout)
         return slot.get("payload")
