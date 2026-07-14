@@ -242,3 +242,49 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── regression: dead-code removals in mqtt_client.py ────────────────────────
+
+class TestMqttClientNoDeadIv:
+    """Regression: username/password stored in __init__ must be read elsewhere.
+
+    Previously BridgeClient.__init__ assigned self._username and self._password
+    as instance attributes but nothing ever read them (the paho client takes them
+    via username_pw_set at construction time). They are dead ivars and must not
+    reappear.
+    """
+
+    def test_no_username_ivar(self, fake_paho):
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", username="user", password="pw")
+        assert not hasattr(c, "_username")
+
+    def test_no_password_ivar(self, fake_paho):
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", username="user", password="pw")
+        assert not hasattr(c, "_password")
+
+
+class TestMqttClientNoUnusedImport:
+    """Regression: 'import time' must not be present (was unused, removed)."""
+
+    def test_no_time_import(self):
+        import ast
+        src = open("cli_anything/zigbee2mqtt/core/mqtt_client.py").read()
+        tree = ast.parse(src)
+        imports = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        assert "time" not in imports
+
+
+class TestMqttClientDocstringReferencesRequest:
+    """Regression: module docstring must reference 'request', not 'bridge_request'."""
+
+    def test_docstring_no_bridge_request(self):
+        src = open("cli_anything/zigbee2mqtt/core/mqtt_client.py").read()
+        assert "bridge_request" not in src
