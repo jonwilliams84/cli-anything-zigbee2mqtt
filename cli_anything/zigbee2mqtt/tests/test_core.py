@@ -242,3 +242,45 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+    def test_on_message_decode_unicode_fallback(self, fake_paho):
+        """Non-UTF-8 binary payload should be decoded with replacement, not
+        crash the message handler (UnicodeDecodeError is caught)."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+        c = BridgeClient("fake-host", base_topic="z2m")
+        with c:
+            received = []
+
+            def handler(topic, payload):
+                received.append((topic, payload))
+
+            c.subscribe("z2m/+/set", handler)
+
+            # Simulate a raw (binary) message that is not valid UTF-8.
+            # msg.payload must be bytes-like.  We drive _on_message directly.
+            class FakeRawMsg:
+                topic = "z2m/some-device/set"
+                payload = b"\xff\xfe\x00\x01"  # invalid UTF-8
+
+            # Should not raise — UnicodeDecodeError is caught.
+            c._on_message(None, None, FakeRawMsg())
+            assert len(received) == 1
+            assert received[0][0] == "z2m/some-device/set"
+
+    def test_on_message_callback_exception_swallowed(self, fake_paho):
+        """A crashing subscriber callback must not propagate out of
+        _on_message (bare Exception is caught and silenced)."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+        c = BridgeClient("fake-host", base_topic="z2m")
+        with c:
+            c.subscribe("z2m/+/set", lambda _t, _p: 1 / 0)
+
+            class FakeMsg:
+                topic = "z2m/device/set"
+                payload = b'{"state":"ON"}'
+
+            # Must not raise — exception inside the subscriber is swallowed.
+            c._on_message(None, None, FakeMsg())
+

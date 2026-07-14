@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import threading
-import time
+
 import uuid
 from typing import Any, Callable, Optional
 
@@ -143,7 +143,7 @@ class BridgeClient:
         topic = msg.topic
         try:
             payload = msg.payload.decode("utf-8", errors="replace")
-        except Exception:
+        except UnicodeDecodeError:
             payload = ""
         # bridge response handling
         prefix = f"{self.base_topic}/bridge/response/"
@@ -165,7 +165,7 @@ class BridgeClient:
             if mqtt.topic_matches_sub(filt, topic):
                 try:
                     cb(topic, payload)
-                except Exception:
+                except Exception as exc:
                     pass
 
     # ── generic publish / subscribe ─────────────────────────────────────
