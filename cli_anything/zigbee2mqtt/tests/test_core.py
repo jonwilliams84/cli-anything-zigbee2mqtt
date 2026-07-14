@@ -242,3 +242,44 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── regression: dead-code fixes in mqtt_client.py ───────────────────────────
+
+class TestMqttClientDeadCodeFix:
+    """Regression: ensure no unused imports or dead instance-variable stores remain.
+
+    Verified fixes:
+    - `import time` was dead (no time.* calls existed anywhere in the module).
+    - `self._username` and `self._password` were stored but never read after.
+      The username/password flow is: __init__ param → username_pw_set() →
+      paho client internal — no instance-level caching needed.
+    """
+
+    def test_no_time_import(self):
+        src = open("cli_anything/zigbee2mqtt/core/mqtt_client.py").read()
+        # verify the 'time' module is not imported
+        for line in src.splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith("import time"), (
+                "dead import 'time' must not be present"
+            )
+            assert not stripped.startswith("from time import"), (
+                "dead import 'time' must not be present"
+            )
+
+    def test_bridge_client_accepts_username_password(self, fake_paho):
+        from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
+        c = mc.BridgeClient("localhost", username="alice", password="s3cr3t")
+        # username+password must be forwarded to paho client.username_pw_set()
+        assert c.client.username == "alice"
+        assert c.client.password == "s3cr3t"
+
+    def test_no_dead_username_password_attributes(self, fake_paho):
+        from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
+        c = mc.BridgeClient("localhost", username="bob", password="xyz")
+        # _username / _password must NOT be stored as instance vars (dead stores)
+        assert not hasattr(c, "_username"), "dead store: self._username"
+        assert not hasattr(c, "_password"), "dead store: self._password"
