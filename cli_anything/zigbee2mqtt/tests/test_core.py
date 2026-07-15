@@ -242,3 +242,42 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── regression: no unused imports in mqtt_client ──────────────────────────
+
+class TestMqttClientSanity:
+    def test_no_unused_imports(self):
+        """Verify mqtt_client.py has no unused top-level imports.
+
+        This is a regression guard for the confirmed finding: 'time' was
+        imported but never referenced in the module.
+        """
+        import ast, os
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "core", "mqtt_client.py"
+        )
+        with open(path) as fh:
+            tree = ast.parse(fh.read(), filename="mqtt_client.py")
+
+        # Collect what is imported at module level (skip __future__ imports)
+        top_imports: list[str] = []
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_imports.append(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "__future__":
+                    continue  # skip __future__ (e.g. annotations)
+                for alias in node.names:
+                    top_imports.append(alias.asname or alias.name)
+
+        # Collect all name references in the module body
+        used: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                used.add(node.id)
+
+        unused = [n for n in top_imports if n not in used]
+        assert unused == [], f"unused imports in mqtt_client.py: {unused}"
