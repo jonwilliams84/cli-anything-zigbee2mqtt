@@ -242,3 +242,20 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+class TestMqttClientImports:
+    """Regression: mqtt_client.py must not import the stdlib time module.
+
+    The module uses threading.Event.wait(timeout=N) for all timeouts;
+    time.time() / time.sleep() are not needed.
+    """
+
+    def test_no_time_import(self):
+        import cli_anything.zigbee2mqtt.core.mqtt_client as mc
+        # The module-level namespace should not contain a 'time' reference
+        # that came from the stdlib (i.e. not shadowed / re-bound).
+        assert "time" not in dir(mc), (
+            "mqtt_client.py must not import stdlib time; "
+            "use threading.Event.wait(timeout=N) for all timeouts"
+        )
