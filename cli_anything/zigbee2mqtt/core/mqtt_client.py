@@ -204,6 +204,12 @@ class BridgeClient:
         def _cb(_t, p):
             slot["payload"] = p
             event.set()
+        
         self.subscribe(topic, _cb)
         event.wait(timeout=timeout)
+        
+        # FIX: Remove the one-shot callback to prevent memory leak
+        with self._lock:
+            self._subscribers = [s for s in self._subscribers if s[1] != _cb]
+            
         return slot.get("payload")
