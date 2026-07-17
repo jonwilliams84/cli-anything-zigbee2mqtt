@@ -242,3 +242,51 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+class TestCollectRetained:
+    """Regression: collect_retained must remove its one-shot subscription after use."""
+
+    def _patch_subscribe(self, client, payload_bytes):
+        """Return a subscribe() replacement that immediately delivers a retained message."""
+        orig_subscribe = client.client.subscribe
+
+        def patched_subscribe(topic, qos=0):
+            result = orig_subscribe(topic, qos=qos)
+            if hasattr(client.client, 'on_message') and client.client.on_message:
+                class _Msg:
+                    def __init__(self, t, p):
+                        self.topic = t
+                        self.payload = p
+                client.client.on_message(client.client, None, _Msg(topic, payload_bytes))
+            return result
+
+        return patched_subscribe
+
+    def test_collect_retained_does_not_leak_subscription(self, fake_paho):
+        """Each collect_retained call must leave _subscribers unchanged in length."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
+
+        with c as client:
+            initial_count = len(client._subscribers)
+            canned_payload = json.dumps({"version": "1.2.3"})
+            client.client.subscribe = self._patch_subscribe(client, canned_payload.encode())
+
+            result = client.collect_retained("zigbee2mqtt/bridge/info")
+            assert result == canned_payload
+            assert len(client._subscribers) == initial_count
+
+    def test_collect_retained_multiple_calls_same_count(self, fake_paho):
+        """Ten repeated calls must keep subscriber count at the initial value."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
+
+        with c as client:
+            initial_count = len(client._subscribers)
+            client.client.subscribe = self._patch_subscribe(client, b'{"retained": true}')
+
+            for _ in range(10):
+                client.collect_retained("zigbee2mqtt/bridge/devices")
+
+            assert len(client._subscribers) == initial_count

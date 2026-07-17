@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -189,8 +188,8 @@ class BridgeClient:
     def subscribe(self, filter_: str, callback: Callable[[str, str], None]) -> None:
         if not self._connected:
             self.connect()
-        self.client.subscribe(filter_, qos=0)
         self._subscribers.append((filter_, callback))
+        self.client.subscribe(filter_, qos=0)
 
     def collect_retained(self, topic: str, *, timeout: float = 5.0) -> Optional[str]:
         """One-shot: subscribe, wait for the retained message on `topic`, return payload.
@@ -205,5 +204,12 @@ class BridgeClient:
             slot["payload"] = p
             event.set()
         self.subscribe(topic, _cb)
-        event.wait(timeout=timeout)
+        try:
+            event.wait(timeout=timeout)
+        finally:
+            # Clean up the one-shot subscription so it doesn't accumulate.
+            try:
+                self._subscribers.remove((topic, _cb))
+            except ValueError:
+                pass
         return slot.get("payload")
