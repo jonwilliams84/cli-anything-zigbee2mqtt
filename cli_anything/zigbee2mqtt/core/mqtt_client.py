@@ -152,7 +152,7 @@ class BridgeClient:
                 data = json.loads(payload) if payload else {}
             except json.JSONDecodeError:
                 data = {"raw": payload}
-            txn = data.get("transaction")
+            txn = data.get("transaction") if isinstance(data, dict) else None
             if txn:
                 with self._lock:
                     pending = self._pending.get(txn)
