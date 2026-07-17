@@ -242,3 +242,38 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── Regression: dead-code removals in mqtt_client ────────────────────────────
+
+class TestMqttClientDeadCodeRemovals:
+    """Regression tests for confirmed findings in mqtt_client.py.
+
+    These guard against re-introducing unused `import time` or the
+    unused `self._username` / `self._password` instance attributes.
+    """
+
+    def test_no_time_import_in_mqtt_client(self):
+        """`time` must not be imported in mqtt_client.py."""
+        import cli_anything.zigbee2mqtt.core.mqtt_client as mc
+        # time must not appear in the module's namespace
+        assert "time" not in dir(mc), "unused 'import time' was re-introduced"
+
+    def test_no_username_password_instance_attrs(self, fake_paho):
+        """BridgeClient must not store _username/_password as instance attrs.
+
+        Credentials are passed directly to client.username_pw_set() and must
+        not be retained on self after __init__.
+        """
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("localhost", username="user", password="secret")
+        # The public username/password are consumed immediately; no leakage
+        assert not hasattr(c, "_username"), "unused self._username was re-introduced"
+        assert not hasattr(c, "_password"), "unused self._password was re-introduced"
+
+    def test_username_password_passed_to_mqtt_client(self, fake_paho):
+        """Credentials passed to BridgeClient must reach the underlying client."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("localhost", username="admin", password="hunter2")
+        assert c.client.username == "admin"
+        assert c.client.password == "hunter2"
