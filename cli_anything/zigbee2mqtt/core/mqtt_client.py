@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -122,7 +121,7 @@ class BridgeClient:
         event = threading.Event()
         slot: dict = {}
         with self._lock:
-            self._pending[txn] = {"event": event, "slot": slot, "path": path}
+            self._pending[txn] = {"event": event, "slot": slot}
 
         try:
             info = self.client.publish(topic, body, qos=0)

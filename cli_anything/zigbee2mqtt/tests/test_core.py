@@ -189,6 +189,51 @@ class TestBridgeClient:
             assert resp["status"] == "ok"
             assert resp["data"]["echo"] == "device/rename"
 
+
+    def test_request_pending_slot_contains_no_path(self, fake_paho):
+        """Regression: _pending dict must not store 'path' (dead-code removal).
+
+        The 'path' key was removed from the pending slot — it was never read
+        anywhere and served no purpose. This test confirms it stays gone and
+        that _pending[txn] only contains the keys actually used downstream:
+        'event' (threading.Event) and 'slot' (result dict written by _on_message).
+        """
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+        c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
+        # Access the BridgeClient's _pending through its real instance
+        bridge_client = c
+
+        def capture_then_respond(original_publish):
+            def wrapper(fake_client, topic, payload, qos=0, retain=False):
+                result = original_publish(fake_client, topic, payload, qos, retain)
+                # BridgeClient._pending lives on the BridgeClient instance,
+                # which owns the FakeMqttClient.  We access it via the
+                # real BridgeClient object captured in the closure.
+                for txn_id, val in list(bridge_client._pending.items()):
+                    captured_pending[txn_id] = dict(val)
+                return result
+            return wrapper
+
+        captured_pending: dict = {}
+        original_publish = FakeMqttClient.publish
+        FakeMqttClient.publish = capture_then_respond(original_publish)
+
+        with c:
+            c.request("device/rename", payload={"from": "A", "to": "B"})
+
+        # Restore for other tests.
+        FakeMqttClient.publish = original_publish
+
+        assert len(captured_pending) == 1, "expected exactly one pending txn"
+        slot = next(iter(captured_pending.values()))
+        assert "event" in slot, "expected 'event' key in pending slot"
+        assert "slot" in slot, "expected 'slot' key in pending slot"
+        assert "path" not in slot, (
+            "regression: 'path' key must NOT be stored in _pending — "
+            "it was confirmed dead code (never read after write)"
+        )
+
     def test_request_raises_on_error_status(self, fake_paho, monkeypatch):
         """If z2m returns status=error, BridgeClient.request should raise."""
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
