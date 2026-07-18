@@ -88,6 +88,7 @@ class FakeMqttClient:
         self.client_id = client_id
         self.on_message = None
         self.subscriptions: list[str] = []
+        self.unsubscriptions: list[str] = []
         self.published: list[tuple[str, str, int, bool]] = []
         self.username = None
         self.password = None
@@ -116,6 +117,7 @@ class FakeMqttClient:
         self.subscriptions.append(topic)
 
     def unsubscribe(self, topic):
+        self.unsubscriptions.append(topic)
         self.subscriptions = [s for s in self.subscriptions if s != topic]
 
     def publish(self, topic, payload, qos=0, retain=False):
@@ -195,6 +197,7 @@ class TestBridgeClient:
         threading.Thread(target=simulate_message).start()
         val = c.collect_retained(topic)
         assert val == "retained-value"
+        assert topic in c.client.unsubscriptions
         assert topic not in c.client.subscriptions
         assert not any(cb is not None for _, cb in c._subscribers)
 
