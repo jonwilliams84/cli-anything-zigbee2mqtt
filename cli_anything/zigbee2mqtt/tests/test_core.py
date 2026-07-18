@@ -115,6 +115,9 @@ class FakeMqttClient:
     def subscribe(self, topic, qos=0):
         self.subscriptions.append(topic)
 
+    def unsubscribe(self, topic):
+        self.subscriptions = [s for s in self.subscriptions if s != topic]
+
     def publish(self, topic, payload, qos=0, retain=False):
         self.published.append((topic, payload, qos, retain))
         # Auto-respond on bridge request
@@ -173,6 +176,28 @@ def fake_paho(monkeypatch):
 
 
 class TestBridgeClient:
+    def test_collect_retained_unsubscribes(self, fake_paho):
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
+        c.connect()
+        topic = "zigbee2mqtt/test/retained"
+
+        def simulate_message():
+            import time
+            time.sleep(0.1)
+
+            class FakeMsg:
+                def __init__(self, t, p):
+                    self.topic = t
+                    self.payload = p.encode()
+            c.client.on_message(c.client, None, FakeMsg(topic, "retained-value"))
+
+        threading.Thread(target=simulate_message).start()
+        val = c.collect_retained(topic)
+        assert val == "retained-value"
+        assert topic not in c.client.subscriptions
+        assert not any(cb is not None for _, cb in c._subscribers)
+
     def test_connect_subscribes_to_response(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
         c = BridgeClient("fake-host", base_topic="zigbee2mqtt")

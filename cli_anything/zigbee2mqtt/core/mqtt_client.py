@@ -206,4 +206,6 @@ class BridgeClient:
             event.set()
         self.subscribe(topic, _cb)
         event.wait(timeout=timeout)
+        self.client.unsubscribe(topic)
+        self._subscribers = [s for s in self._subscribers if s[1] != _cb]
         return slot.get("payload")
