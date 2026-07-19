@@ -5,6 +5,8 @@ The MQTT client is exercised against a fake transport so no broker is needed.
 
 from __future__ import annotations
 
+import pathlib
+
 import json
 import threading
 import time
@@ -242,3 +244,40 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+class TestMqttClientModule:
+    def test_no_unused_imports(self):
+        """Regression: mqtt_client.py must not import unused modules."""
+        import ast
+        src = pathlib.Path(__file__).resolve().parents[1] / "core" / "mqtt_client.py"
+        src = src.read_text()
+        tree = ast.parse(src)
+
+        # Collect names actually referenced in the code body
+        names_used: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                names_used.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Name):
+                    names_used.add(node.value.id)
+
+        # Collect imported names
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imported.add(node.module.split(".")[0])
+
+        unused = imported - names_used
+        # Allow stdlib helpers that are commonly available; only fail on
+        # clearly dead third-party / non-stdlib imports.
+        # 'time' was the confirmed bug — assert it stays removed.
+        assert "time" not in unused, (
+            f"'time' is imported but unused in mqtt_client.py. "
+            "Remove the 'import time' line."
+        )
