@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -166,7 +165,14 @@ class BridgeClient:
                 try:
                     cb(topic, payload)
                 except Exception:
-                    pass
+                    # Log but don't re-raise — subscriber errors must not
+                    # break the general message loop (runs in paho thread).
+                    import sys as _sys
+                    import traceback as _tb
+                    _sys.stderr.write(
+                        f"[BridgeClient] subscriber callback error: "
+                        f"{_tb.format_exc()}"
+                    )
 
     # ── generic publish / subscribe ─────────────────────────────────────
 

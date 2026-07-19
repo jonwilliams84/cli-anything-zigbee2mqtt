@@ -242,3 +242,54 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── BridgeClient subscriber error handling ──────────────────────────────────
+
+class TestBridgeClientSubscriberError:
+    """Regression: subscriber callback errors must be logged, not swallowed.
+
+    Bare ``except Exception: pass`` silently drops bugs.  The fix logs the
+    traceback to stderr so operators can see what went wrong without crashing
+    the paho message loop.
+    """
+
+    def test_subscriber_exception_is_logged_to_stderr(self, fake_paho, capsys):
+        from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
+        client = mc.BridgeClient("localhost", client_id="test-subscriber-err")
+        client.connect()
+
+        error_calls = []
+
+        def bad_cb(topic, payload):
+            error_calls.append((topic, payload))
+            raise RuntimeError("boom from subscriber")
+
+        client.subscribe("zigbee2mqtt/+/state", bad_cb)
+
+        # Inject a message directly into _on_message
+        class FakeMsg:
+            topic = "zigbee2mqtt/kitchen/state"
+            payload = b'{"state":"ON"}'
+
+        client._on_message(None, None, FakeMsg())
+
+        # Callback must have been called
+        assert len(error_calls) == 1
+
+        # stderr must contain the traceback fragment
+        captured = capsys.readouterr()
+        assert "boom from subscriber" in captured.err
+        assert "RuntimeError" in captured.err
+
+        # Second subscriber fires normally (loop not broken)
+        fine_calls = []
+
+        def fine_cb(topic, payload):
+            fine_calls.append((topic, payload))
+
+        client.subscribe("zigbee2mqtt/+/state", fine_cb)
+        client._on_message(None, None, FakeMsg())
+
+        assert len(fine_calls) == 1
