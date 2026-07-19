@@ -242,3 +242,22 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+    def test_mqtt_client_does_not_import_time(self, fake_paho):
+        """Regression: mqtt_client.py must not import the unused `time` module.
+
+        The module previously carried `import time` with no usage anywhere in
+        the file; removing it is the fix under test. This guards against the
+        unused import creeping back in.
+        """
+        import inspect
+        import cli_anything.zigbee2mqtt.core.mqtt_client as mc
+        src = inspect.getsource(mc)
+        for line in src.splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith("import time"), (
+                "mqtt_client.py must not import the unused `time` module"
+            )
+            assert not stripped.startswith("from time import"), (
+                "mqtt_client.py must not import the unused `time` module"
+            )
