@@ -12,11 +12,9 @@ topics (`zigbee2mqtt/<friendly_name>`), bridge events / logging, and per-device
 `/get` and `/set` writes.
 """
 
-from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
