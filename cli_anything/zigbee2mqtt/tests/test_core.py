@@ -242,3 +242,49 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── import hygiene regression ───────────────────────────────────────────────
+
+
+
+# ── import hygiene regression ───────────────────────────────────────────────
+
+class TestMqttClientImports:
+    """Regression: mqtt_client.py must not have unused bare-import statements."""
+
+    def test_no_unused_imports_in_mqtt_client(self):
+        """Verify no unused bare ``import <name>`` statements remain.
+
+        This guards against the F401 finding: ``import time`` was imported
+        but never referenced.  The check walks the same Name/Ast surface as
+        flake8, but restricts itself to bare ``import`` statements so that
+        ``from typing import X`` / ``from paho.mqtt import client`` (which are
+        valid even though the parent module name isn't otherwise referenced)
+        do not produce false positives.
+        """
+        import ast, pathlib
+
+        src = pathlib.Path(__file__).parents[1] / "core" / "mqtt_client.py"
+        tree = ast.parse(src.read_text())
+
+        # Collect every name used anywhere in the module
+        referenced: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                referenced.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Name):
+                    referenced.add(node.value.id)
+
+        # Find bare `import <name>` statements whose top-level name is unused
+        unused = []
+        for imp in tree.body:
+            if not isinstance(imp, ast.Import):
+                continue
+            for alias in imp.names:
+                top = alias.name.split(".")[0]
+                if top not in referenced:
+                    unused.append(f"import {alias.name}")
+
+        assert not unused, f"bare import(s) with no references in mqtt_client.py: {unused}"
