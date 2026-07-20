@@ -231,6 +231,34 @@ class TestBridgeClient:
 
         monkeypatch.setattr(FakeMqttClient, "publish", orig_publish, raising=True)
 
+    def test_subscriber_exception_propagates(self, fake_paho):
+        """Regression: subscriber callbacks that raise must not be silently swallowed."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        import paho.mqtt.client as paho_mqtt
+        import json
+
+        exc_msg = "boom in subscriber"
+        delivered = []
+
+        def bad_cb(topic, payload):
+            delivered.append((topic, payload))
+            raise RuntimeError(exc_msg)
+
+        c = BridgeClient("fake-host", base_topic="z2m")
+        with c as client:
+            client.subscribe("z2m/something/#", bad_cb)
+            # Simulate an MQTT message arriving on that topic
+            msg = paho_mqtt.MQTTMessage(topic=b"z2m/something/foo")
+            msg.payload = json.dumps({"key": "val"}).encode()
+            msg.qos = 0
+            with pytest.raises(RuntimeError, match=exc_msg):
+                client.client.on_message(client.client, None, msg)
+
+            # Callback was invoked before re-raising
+            assert delivered == [("z2m/something/foo", '{"key": "val"}')], \
+                "callback should have been called before exception propagated"
+
+
     def test_publish_topic_format(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
         from cli_anything.zigbee2mqtt.core import devices

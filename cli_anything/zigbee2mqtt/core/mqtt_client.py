@@ -166,7 +166,7 @@ class BridgeClient:
                 try:
                     cb(topic, payload)
                 except Exception:
-                    pass
+                    raise
 
     # ── generic publish / subscribe ─────────────────────────────────────
 
