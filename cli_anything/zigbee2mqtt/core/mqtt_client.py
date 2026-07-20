@@ -156,10 +156,10 @@ class BridgeClient:
             if txn:
                 with self._lock:
                     pending = self._pending.get(txn)
-                if pending:
-                    pending["slot"]["response"] = data
-                    pending["event"].set()
-                    return
+                    if pending:
+                        pending["slot"]["response"] = data
+                        pending["event"].set()
+                        return
         # general subscriber dispatch
         for filt, cb in list(self._subscribers):
             if mqtt.topic_matches_sub(filt, topic):

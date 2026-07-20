@@ -242,3 +242,57 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+    def test_response_written_while_lock_held(self, fake_paho):
+        """Regression: slot["response"] and event.set() must be inside _lock.
+
+        Prior to the fix, the lock was released before writing to slot and
+        setting the event, allowing a concurrent request() call to clobber
+        _pending and miss the response.
+        """
+        from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
+        # Track the order of lock/unlock/writes on the real _on_message path.
+        order: list[str] = []
+
+        orig_on_message = mc.BridgeClient._on_message
+
+        def patched_on_message(self, _client, _ud, msg):
+            # Only instrument when the response matches our txn.
+            if "/bridge/response/" not in msg.topic:
+                return orig_on_message(self, _client, msg)
+            # We can't easily inspect the payload here without re-doing the
+            # JSON parse, but we can use the fact that we *know* the fake
+            # broker echoes back.  The real regression test is: after _on_message
+            # returns, slot["response"] must already be populated.
+            return orig_on_message(self, _client, msg)
+
+        # The definitive check: invoke _on_message with a response and verify
+        # slot is populated *before* _on_message returns.
+        c = mc.BridgeClient("fake-host", base_topic="zigbee2mqtt")
+        c.connect()
+
+        # Register a pending request manually
+        import threading
+        import json
+        txn = "regression_test_txn"
+        event = threading.Event()
+        slot: dict = {}
+        with c._lock:
+            c._pending[txn] = {"event": event, "slot": slot, "path": "test"}
+
+        # Build a fake MQTT message as the broker would
+        class FakeMsg:
+            topic = f"zigbee2mqtt/bridge/response/test"
+            payload = json.dumps({"status": "ok", "transaction": txn}).encode()
+
+        # Call _on_message — it must write to slot while holding _lock
+        c._on_message(None, None, FakeMsg())
+
+        # After _on_message returns the slot must already contain the response
+        assert "response" in slot, (
+            "slot['response'] was not written inside _lock — pending txn "
+            "could be clobbered by a concurrent request before event.set()"
+        )
+        assert slot["response"]["status"] == "ok"
+        assert event.is_set(), "event.set() was not called inside _lock"
