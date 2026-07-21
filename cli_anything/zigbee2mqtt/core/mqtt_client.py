@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -126,7 +125,10 @@ class BridgeClient:
 
         try:
             info = self.client.publish(topic, body, qos=0)
-            info.wait_for_publish(timeout=5)
+            try:
+                info.wait_for_publish(timeout=5)
+            except Exception as exc:
+                raise MqttError(f"publish failed for {path}: {exc}") from exc
             if not event.wait(timeout=timeout):
                 raise MqttError(f"timed out waiting for response to {path}")
         finally:
@@ -155,7 +157,7 @@ class BridgeClient:
             txn = data.get("transaction")
             if txn:
                 with self._lock:
-                    pending = self._pending.get(txn)
+                    pending = self._pending.pop(txn, None)
                 if pending:
                     pending["slot"]["response"] = data
                     pending["event"].set()
