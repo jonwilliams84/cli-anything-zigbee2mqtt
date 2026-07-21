@@ -242,3 +242,30 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+class TestMqttClientImports:
+    """Regression: ensure mqtt_client.py carries no unused imports."""
+
+    def test_no_unused_imports_in_mqtt_client(self):
+        """The time module is not used anywhere in mqtt_client.py."""
+        import ast
+        from pathlib import Path
+
+        src = Path(__file__).parent.parent / "core" / "mqtt_client.py"
+        tree = ast.parse(src.read_text())
+
+        used_names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    imported.add(alias.asname or alias.name)
+
+        # time is imported but never referenced
+        assert "time" not in imported or "time" in used_names, (
+            "time is imported in mqtt_client.py but not used — remove it"
+        )
