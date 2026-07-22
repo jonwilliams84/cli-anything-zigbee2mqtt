@@ -242,3 +242,28 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── regression: no dead imports / unused instance attributes ─────────────────
+
+class TestNoDeadCode:
+    """Regression tests: no unused imports or unused instance attributes."""
+
+    def test_mqtt_client_has_no_time_import(self):
+        """time is imported but never used in mqtt_client.py — it must not be there."""
+        import cli_anything.zigbee2mqtt.core.mqtt_client as mqtt_client
+        # If `import time` is present but `time.` is never used, this import
+        # leaks into the module namespace as an unused artifact.
+        # The fix removes the import, so we assert it is absent.
+        assert "time" not in dir(mqtt_client), (
+            "import time is dead code in mqtt_client.py — remove it"
+        )
+
+    def test_bridge_client_no_unused_credentials_attributes(self, fake_paho):
+        """_username / _password were stored on self but never read — remove them."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", username="user", password="pass")
+        # These attributes should not exist — the credentials are passed
+        # directly to paho's username_pw_set and are not stored on self.
+        assert not hasattr(c, "_username"), "_username is dead storage"
+        assert not hasattr(c, "_password"), "_password is dead storage"
