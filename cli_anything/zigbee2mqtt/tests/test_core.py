@@ -242,3 +242,41 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── regression: no unused imports ─────────────────────────────────────────────
+
+class TestStyle:
+    def test_no_unused_imports_in_mqtt_client(self):
+        """Regression: time was imported but never used in mqtt_client.py."""
+        import ast
+        src = open("cli_anything/zigbee2mqtt/core/mqtt_client.py").read()
+        tree = ast.parse(src)
+
+        # collect every name referenced anywhere in the AST
+        used_names: set[str] = set()
+
+        class NameCollector(ast.NodeVisitor):
+            def visit_Name(self, node):
+                used_names.add(node.id)
+                self.generic_visit(node)
+
+            def visit_Attribute(self, node):
+                if isinstance(node.value, ast.Name):
+                    used_names.add(node.value.id)
+                self.generic_visit(node)
+
+        NameCollector().visit(tree)
+
+        # check every top-level import; skip __future__ (PEP 563 placeholder)
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                continue
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    name = alias.asname or alias.name.split(".")[0]
+                    assert name in used_names, f"unused import: {name}"
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    name = alias.asname or alias.name
+                    assert name in used_names, f"unused import: {alias.name} from {node.module}"
