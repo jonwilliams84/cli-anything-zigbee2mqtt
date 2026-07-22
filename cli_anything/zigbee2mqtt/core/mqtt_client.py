@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -118,6 +117,9 @@ class BridgeClient:
             # scalar payload (rare) — wrap into the standard shape
             payload = {"value": payload, "transaction": txn}
         body = json.dumps(payload)
+
+        # Use the transaction actually sent (caller may have supplied one).
+        txn = payload["transaction"]
 
         event = threading.Event()
         slot: dict = {}

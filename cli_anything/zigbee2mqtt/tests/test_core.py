@@ -189,6 +189,17 @@ class TestBridgeClient:
             assert resp["status"] == "ok"
             assert resp["data"]["echo"] == "device/rename"
 
+    def test_request_with_caller_supplied_transaction(self, fake_paho):
+        """A payload that already carries a transaction must still correlate."""
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
+        with c as client:
+            resp = client.request("device/rename",
+                                   payload={"from": "A", "to": "B",
+                                            "transaction": "caller-txn-1"})
+            assert resp["status"] == "ok"
+            assert resp["transaction"] == "caller-txn-1"
+
     def test_request_raises_on_error_status(self, fake_paho, monkeypatch):
         """If z2m returns status=error, BridgeClient.request should raise."""
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
