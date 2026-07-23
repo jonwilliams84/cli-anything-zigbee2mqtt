@@ -242,3 +242,17 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+
+# ── import hygiene ──────────────────────────────────────────────────────────
+
+def test_mqtt_client_imports_are_used():
+    """Regression: verify mqtt_client.py has no unused top-level imports."""
+    import subprocess, pathlib
+    src = pathlib.Path(__file__).parents[1] / "core" / "mqtt_client.py"
+    result = subprocess.run(
+        ["python", "-m", "ruff", "check", str(src)],
+        capture_output=True, text=True,
+    )
+    # ruff exits 0 on clean; any F401 means an unused import was reintroduced
+    assert result.returncode == 0, f"ruff found unused imports:\n{result.stdout}{result.stderr}"
