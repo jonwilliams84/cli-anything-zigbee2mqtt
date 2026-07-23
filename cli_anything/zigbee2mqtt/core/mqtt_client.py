@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -51,8 +50,6 @@ class BridgeClient:
         self.host = host
         self.port = port
         self.base_topic = base_topic.rstrip("/")
-        self._username = username
-        self._password = password
         self.client_id = client_id or f"cli-anything-z2m-{uuid.uuid4().hex[:8]}"
         self.keepalive = keepalive
         self.client = mqtt.Client(client_id=self.client_id)
@@ -122,7 +119,7 @@ class BridgeClient:
         event = threading.Event()
         slot: dict = {}
         with self._lock:
-            self._pending[txn] = {"event": event, "slot": slot, "path": path}
+            self._pending[txn] = {"event": event, "slot": slot}
 
         try:
             info = self.client.publish(topic, body, qos=0)
