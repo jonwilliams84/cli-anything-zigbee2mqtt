@@ -242,3 +242,24 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+    def test_collect_retained_cleans_up_subscriber(self, fake_paho):
+        """Regression: collect_retained must remove its one-shot callback
+        from _subscribers after returning, so the slot/event/callback
+        don't leak across repeated calls.
+        """
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
+        with c as client:
+            # No retained message arrives in the fake transport, so this
+            # will time out and return None — but the callback must still
+            # be cleaned up.
+            result = client.collect_retained("zigbee2mqtt/bridge/devices",
+                                               timeout=0.05)
+            assert result is None
+            # The one-shot callback should have been removed.
+            assert client._subscribers == []
+
+            # A second call should also leave _subscribers empty.
+            client.collect_retained("zigbee2mqtt/bridge/info", timeout=0.05)
+            assert client._subscribers == []
