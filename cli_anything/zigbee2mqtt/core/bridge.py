@@ -72,8 +72,8 @@ def watch_logging(client: BridgeClient, *,
         if callback:
             try:
                 callback(data)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - user callback errors must not break tail
+                data["_callback_error"] = str(exc)
     client.subscribe(f"{client.base_topic}/bridge/logging", _cb)
     end = time.time() + duration if duration else None
     try:
@@ -99,8 +99,8 @@ def watch_events(client: BridgeClient, *,
         if callback:
             try:
                 callback(data)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - user callback errors must not break tail
+                data["_callback_error"] = str(exc)
     client.subscribe(f"{client.base_topic}/bridge/event", _cb)
     end = time.time() + duration if duration else None
     try:

@@ -8,7 +8,7 @@ and rolling the deployment when a hot-reload isn't sufficient.
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404 - subprocess required for validated kubectl calls
 from dataclasses import dataclass
 from typing import Optional
 
@@ -34,7 +34,7 @@ def _kubectl() -> str:
 def _run(args: list[str], *, stdin: Optional[bytes] = None,
           check: bool = True) -> subprocess.CompletedProcess:
     kc = _kubectl()
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 - argv built from validated K8sTarget
         [kc, *args], input=stdin, capture_output=True, text=False, check=False,
     )
     if check and proc.returncode != 0:
