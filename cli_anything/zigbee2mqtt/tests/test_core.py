@@ -42,12 +42,18 @@ class TestProject:
         cfg = project.load_config(tmp_path / "no.json")
         if cfg["mqtt_host"] != "172.16.0.10":
             raise AssertionError(f"expected mqtt_host '172.16.0.10', got {cfg['mqtt_host']!r}")
-        assert cfg["mqtt_port"] == 8883
+        # B101 fix: assert is stripped in -O mode
+        if cfg["mqtt_port"] != 8883:
+            raise ValueError(f"expected mqtt_port 8883, got {cfg['mqtt_port']!r}")
 
     def test_merge_cli_ignores_none(self):
         cfg = project.merge_cli_overrides({"mqtt_host": "a"}, mqtt_host=None, base_topic="bb")
-        assert cfg["mqtt_host"] == "a"
-        assert cfg["base_topic"] == "bb"
+        # B101 fix: assert is stripped in -O mode
+        if cfg["mqtt_host"] != "a":
+            raise ValueError(f"expected mqtt_host 'a', got {cfg['mqtt_host']!r}")
+        # B101 fix: assert is stripped in -O mode
+        if cfg["base_topic"] != "bb":
+            raise ValueError(f"expected base_topic 'bb', got {cfg['base_topic']!r}")
 
 
 # ── devices summarize ───────────────────────────────────────────────────────
