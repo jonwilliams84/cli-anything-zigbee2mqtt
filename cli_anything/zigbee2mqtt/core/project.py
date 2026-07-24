@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "mqtt_host": None,
     "mqtt_port": 1883,
     "mqtt_username": None,
-    "mqtt_password": None,
+    "mqtt_password": None,  # nosec B105 — sentinel null in config schema, not a credential
     # z2m base topic (`zigbee2mqtt` is upstream default, but many setups
     # use `z2m` — we expose both `base_topic` for telemetry and an
     # explicit `bridge_base_topic` for the bridge request/response surface

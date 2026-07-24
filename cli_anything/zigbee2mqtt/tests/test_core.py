@@ -19,9 +19,13 @@ from cli_anything.zigbee2mqtt.core import project
 class TestProject:
     def test_defaults_when_no_file(self, tmp_path):
         cfg = project.load_config(tmp_path / "no-such.json")
-        assert cfg["base_topic"] == "zigbee2mqtt"
-        assert cfg["mqtt_port"] == 1883
-        assert cfg["mqtt_host"] is None
+        # replaced assert with if/raise to avoid B101 (assert stripped in -O)
+        if cfg["base_topic"] != "zigbee2mqtt":
+            raise ValueError(f"expected base_topic 'zigbee2mqtt', got {cfg['base_topic']!r}")
+        if cfg["mqtt_port"] != 1883:
+            raise ValueError(f"expected mqtt_port 1883, got {cfg['mqtt_port']!r}")
+        if cfg["mqtt_host"] is not None:
+            raise ValueError(f"expected mqtt_host None, got {cfg['mqtt_host']!r}")
 
     def test_save_round_trip(self, tmp_path):
         p = tmp_path / "profile.json"
@@ -242,6 +246,38 @@ class TestBridgeClient:
         last_topic, last_payload, _, _ = published[-1]
         assert last_topic == "z2m/Lounge Lamp/set"
         assert json.loads(last_payload) == {"state": "ON"}
+
+    def test_on_message_logs_failing_callback(self, fake_paho, caplog):
+        """Regression: subscriber callbacks that raise must be logged, not silently swallowed.
+
+        This was Bandit B110 (Try, Except, Pass).  The fix changed the bare
+        ``except Exception: pass`` into a ``except Exception as exc: logger.warning(...)``
+        block.  The test verifies the warning actually appears.
+        """
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+        import logging
+
+        c = BridgeClient("fake-host", base_topic="z2m")
+        c.connect()
+
+        # register a subscriber whose callback always raises
+        def bad_cb(topic, payload):
+            raise RuntimeError("boom")
+
+        c.subscribe("z2m/some/topic", bad_cb)
+
+        # trigger _on_message with a matching topic — should NOT raise,
+        # and should emit a WARNING log record
+
+        class FakeMsg:
+            topic = "z2m/some/topic"
+            payload = b"{}"
+
+        with caplog.at_level(logging.WARNING, logger="cli_anything.zigbee2mqtt.core.mqtt_client"):
+            c._on_message(None, None, FakeMsg())  # type: ignore[arg-type]
+
+        assert any("boom" in record.message for record in caplog.records), \
+            "Expected a log record containing 'boom' from the failing callback"
 
 
 
