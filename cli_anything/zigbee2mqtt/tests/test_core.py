@@ -31,14 +31,17 @@ class TestProject:
         p = tmp_path / "profile.json"
         project.save_config({"mqtt_host": "10.0.0.5", "base_topic": "z2m"}, p)
         cfg = project.load_config(p)
-        assert cfg["mqtt_host"] == "10.0.0.5"
-        assert cfg["base_topic"] == "z2m"
+        if cfg["mqtt_host"] != "10.0.0.5":
+            raise AssertionError(f"expected mqtt_host '10.0.0.5', got {cfg['mqtt_host']!r}")
+        if cfg["base_topic"] != "z2m":
+            raise AssertionError(f"expected base_topic 'z2m', got {cfg['base_topic']!r}")
 
     def test_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLI_Z2M_MQTT_HOST", "172.16.0.10")
         monkeypatch.setenv("CLI_Z2M_MQTT_PORT", "8883")
         cfg = project.load_config(tmp_path / "no.json")
-        assert cfg["mqtt_host"] == "172.16.0.10"
+        if cfg["mqtt_host"] != "172.16.0.10":
+            raise AssertionError(f"expected mqtt_host '172.16.0.10', got {cfg['mqtt_host']!r}")
         assert cfg["mqtt_port"] == 8883
 
     def test_merge_cli_ignores_none(self):
