@@ -15,6 +15,7 @@ topics (`zigbee2mqtt/<friendly_name>`), bridge events / logging, and per-device
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from typing import Any, Callable, Optional
@@ -157,13 +158,14 @@ class BridgeClient:
                     pending["slot"]["response"] = data
                     pending["event"].set()
                     return
-        # general subscriber dispatch
+        # general subscriber dispatch — log callback errors instead of swallowing them
+        logger = logging.getLogger(__name__)
         for filt, cb in list(self._subscribers):
             if mqtt.topic_matches_sub(filt, topic):
                 try:
                     cb(topic, payload)
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: B110 — log instead of silently pass
+                    logger.warning("subscriber callback %r failed for topic %s: %s", cb, topic, exc)
 
     # ── generic publish / subscribe ─────────────────────────────────────
 
