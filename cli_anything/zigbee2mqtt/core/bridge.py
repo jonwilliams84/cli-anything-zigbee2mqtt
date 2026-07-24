@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Callable, Optional
 
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+logger = logging.getLogger(__name__)
 
 
 def info(client: BridgeClient, *, timeout: float = 5.0) -> dict:
@@ -33,7 +36,7 @@ def state(client: BridgeClient, *, timeout: float = 3.0) -> str:
             data = json.loads(raw)
             return data.get("state", raw)
         except json.JSONDecodeError:
-            pass
+            logger.warning("Failed to parse bridge/state payload as JSON: %s", raw)
     return raw
 
 
@@ -72,7 +75,9 @@ def watch_logging(client: BridgeClient, *,
         if callback:
             try:
                 callback(data)
-            except Exception as exc:  # noqa: BLE001 - user callback errors must not break tail
+            except Exception as exc:  # noqa: BLE001
+                # user callback errors must not break the tail loop; log and record
+                logger.warning("watch_logging callback raised: %s", exc, exc_info=True)
                 data["_callback_error"] = str(exc)
     client.subscribe(f"{client.base_topic}/bridge/logging", _cb)
     end = time.time() + duration if duration else None
@@ -99,7 +104,9 @@ def watch_events(client: BridgeClient, *,
         if callback:
             try:
                 callback(data)
-            except Exception as exc:  # noqa: BLE001 - user callback errors must not break tail
+            except Exception as exc:  # noqa: BLE001
+                # user callback errors must not break the tail loop; log and record
+                logger.warning("watch_events callback raised: %s", exc, exc_info=True)
                 data["_callback_error"] = str(exc)
     client.subscribe(f"{client.base_topic}/bridge/event", _cb)
     end = time.time() + duration if duration else None

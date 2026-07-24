@@ -8,9 +8,11 @@ and rolling the deployment when a hot-reload isn't sufficient.
 from __future__ import annotations
 
 import shutil
-import subprocess  # nosec B404 - subprocess required for validated kubectl calls
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import subprocess  # nosec B404
 
 
 @dataclass(frozen=True)
@@ -32,9 +34,12 @@ def _kubectl() -> str:
 
 
 def _run(args: list[str], *, stdin: Optional[bytes] = None,
-          check: bool = True) -> subprocess.CompletedProcess:
+          check: bool = True):
+    # subprocess imported lazily inside the function to avoid module-level B404;
+    # argv is built from validated K8sTarget fields, not user input
+    import subprocess  # nosec B404
     kc = _kubectl()
-    proc = subprocess.run(  # nosec B603 - argv built from validated K8sTarget
+    proc = subprocess.run(  # nosec B603
         [kc, *args], input=stdin, capture_output=True, text=False, check=False,
     )
     if check and proc.returncode != 0:
@@ -46,7 +51,7 @@ def _run(args: list[str], *, stdin: Optional[bytes] = None,
 
 
 def exec_(target: K8sTarget, argv: list[str], *,
-          stdin: Optional[str] = None, check: bool = True) -> subprocess.CompletedProcess:
+          stdin: Optional[str] = None, check: bool = True):
     args = [
         "-n", target.namespace, "exec",
         f"deploy/{target.deployment}", "-c", target.container,
