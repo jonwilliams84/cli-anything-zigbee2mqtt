@@ -730,3 +730,135 @@ print("passed")
             raise AssertionError(
                 f"line-91 if/raise check raised unexpectedly: {result.stderr}"
             )
+
+
+class TestB101FixesDeadCodeRegressionTests:
+    """Regression tests for B101 fixes in the TestMqttClientNoDeadCode class.
+
+    The original code used bare ``assert`` statements (stripped under ``-O``)
+    in the dead-code regression tests at the bottom of test_core.py.  They were
+    replaced with ``if ...: raise AssertionError(...)`` so the checks survive
+    optimised byte-code compilation.  These tests confirm each replacement
+    raises when its condition is violated and does NOT raise when it holds,
+    even under ``python -O``.
+    """
+
+    def test_no_time_import_check_raises_when_imports_present(self):
+        """The 'no time import' if/raise raises when imports list is non-empty."""
+        code = """
+imports = ['time']
+if imports:
+    raise AssertionError(f"'time' module still imported: {imports}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "if/raise check was stripped or did not raise (returncode 0 in -O mode)"
+            )
+
+    def test_no_time_import_check_passes_when_empty(self):
+        """The 'no time import' if/raise does NOT raise when imports is empty."""
+        code = """
+imports = []
+if imports:
+    raise AssertionError(f"'time' module still imported: {imports}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"if/raise check raised unexpectedly: {result.stderr}"
+            )
+
+    def test_no_time_attr_check_raises_when_bad_present(self):
+        """The 'no time attribute' if/raise raises when bad list is non-empty."""
+        code = """
+bad = ["line 5: time.sleep"]
+if bad:
+    raise AssertionError(f"time module still used: {bad}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "if/raise check was stripped or did not raise (returncode 0 in -O mode)"
+            )
+
+    def test_no_time_attr_check_passes_when_empty(self):
+        """The 'no time attribute' if/raise does NOT raise when bad is empty."""
+        code = """
+bad = []
+if bad:
+    raise AssertionError(f"time module still used: {bad}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"if/raise check raised unexpectedly: {result.stderr}"
+            )
+
+    def test_useless_instance_vars_check_raises_when_present(self):
+        """The _username/_password if/raise raises when attrs are present."""
+        code = """
+class C:
+    def __init__(self):
+        self._username = "u"
+        self._password = "p"
+c = C()
+if hasattr(c, '_username'):
+    raise AssertionError("_username is a dead instance var")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "if/raise check was stripped or did not raise (returncode 0 in -O mode)"
+            )
+
+    def test_useless_instance_vars_check_passes_when_absent(self):
+        """The _username/_password if/raise does NOT raise when attrs absent."""
+        code = """
+class C:
+    pass
+c = C()
+if hasattr(c, '_username'):
+    raise AssertionError("_username is a dead instance var")
+if hasattr(c, '_password'):
+    raise AssertionError("_password is a dead instance var")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"if/raise check raised unexpectedly: {result.stderr}"
+            )
+
+    def test_pending_dict_check_raises_when_pattern_absent(self):
+        """The _pending dict if/raise raises when the expected pattern is absent."""
+        code = """
+src = "something else entirely"
+if '_pending[txn] = {"event": event, "slot": slot}' not in src:
+    raise AssertionError("_pending must only contain 'event' and 'slot' keys")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "if/raise check was stripped or did not raise (returncode 0 in -O mode)"
+            )
+
+    def test_pending_dict_check_passes_when_pattern_present(self):
+        """The _pending dict if/raise does NOT raise when pattern is present."""
+        code = """
+src = '    _pending[txn] = {"event": event, "slot": slot}'
+if '_pending[txn] = {"event": event, "slot": slot}' not in src:
+    raise AssertionError("_pending must only contain 'event' and 'slot' keys")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"if/raise check raised unexpectedly: {result.stderr}"
+            )
