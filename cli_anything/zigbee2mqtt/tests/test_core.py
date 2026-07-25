@@ -333,8 +333,10 @@ class TestBridgeClient:
         with caplog.at_level(logging.WARNING, logger="cli_anything.zigbee2mqtt.core.mqtt_client"):
             c._on_message(None, None, FakeMsg())  # type: ignore[arg-type]
 
-        assert any("boom" in record.message for record in caplog.records), \
-            "Expected a log record containing 'boom' from the failing callback"
+        if not any("boom" in record.message for record in caplog.records):
+            raise AssertionError(
+                "Expected a log record containing 'boom' from the failing callback"
+            )
 
 
 
@@ -353,7 +355,8 @@ class TestMqttClientNoDeadCode:
         imports = [n.names[0].name for n in ast.walk(tree)
                    if isinstance(n, ast.Import) and
                       any(x.name == 'time' for x in n.names)]
-        assert not imports, f"'time' module still imported: {imports}"
+        if imports:
+            raise AssertionError(f"'time' module still imported: {imports}")
 
     def test_no_time_attribute_used(self):
         """No code in mqtt_client.py must call time.sleep / time.time / etc."""
@@ -366,7 +369,8 @@ class TestMqttClientNoDeadCode:
                if (isinstance(n, ast.Attribute)
                    and isinstance(n.value, ast.Name)
                    and n.value.id == 'time')]
-        assert not bad, f"time module still used: {bad}"
+        if bad:
+            raise AssertionError(f"time module still used: {bad}")
 
     def test_no_useless_instance_vars(self, fake_paho):
         """_username and _password must not be stored as dead instance vars."""
@@ -455,3 +459,64 @@ class TestB101FixRegressionStatusOk:
                     f"expected status 'ok', got {resp['status']!r}"
                 )
 
+
+
+class TestB101FixRegressionLogRecordCheck:
+    """Regression for line 336 (was assert any("boom" in record.message ...))."""
+
+    def test_boom_in_records_no_raise(self):
+        # Success path: "boom" is present in log records, no exception
+        class FakeRecord:
+            def __init__(self, msg):
+                self.message = msg
+        records = [FakeRecord("something happened"), FakeRecord("callback raised boom error")]
+        if not any("boom" in record.message for record in records):
+            raise AssertionError(
+                "Expected a log record containing 'boom' from the failing callback"
+            )
+
+    def test_boom_in_records_raises_on_missing(self):
+        # Failure path: "boom" is absent, must raise
+        class FakeRecord:
+            def __init__(self, msg):
+                self.message = msg
+        records = [FakeRecord("all good"), FakeRecord("no error here")]
+        with pytest.raises(AssertionError, match="Expected a log record containing 'boom'"):
+            if not any("boom" in record.message for record in records):
+                raise AssertionError(
+                    "Expected a log record containing 'boom' from the failing callback"
+                )
+
+
+class TestB101FixRegressionTimeModuleImport:
+    """Regression for line 356 (was assert not imports)."""
+
+    def test_no_time_imports_no_raise(self):
+        # Success path: imports list is empty, no exception
+        imports: list[str] = []
+        if imports:
+            raise AssertionError(f"'time' module still imported: {imports}")
+
+    def test_time_imports_raises(self):
+        # Failure path: imports list is non-empty, must raise
+        imports = ["time", "os"]
+        with pytest.raises(AssertionError, match="'time' module still imported"):
+            if imports:
+                raise AssertionError(f"'time' module still imported: {imports}")
+
+
+class TestB101FixRegressionTimeAttributeUsed:
+    """Regression for line 369 (was assert not bad)."""
+
+    def test_no_time_attrs_no_raise(self):
+        # Success path: bad list is empty, no exception
+        bad: list[str] = []
+        if bad:
+            raise AssertionError(f"time module still used: {bad}")
+
+    def test_time_attrs_raises(self):
+        # Failure path: bad list is non-empty, must raise
+        bad = ["line 42: time.sleep", "line 99: time.time"]
+        with pytest.raises(AssertionError, match="time module still used"):
+            if bad:
+                raise AssertionError(f"time module still used: {bad}")
