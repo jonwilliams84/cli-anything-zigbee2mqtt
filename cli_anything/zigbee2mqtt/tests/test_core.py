@@ -197,7 +197,8 @@ class TestBridgeClient:
         c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
         c.connect()
         subs = c.client.subscriptions  # type: ignore[attr-defined]
-        assert any("/bridge/response/#" in s for s in subs)
+        if not any("/bridge/response/#" in s for s in subs):
+            raise ValueError(f"expected /bridge/response/# subscription, got {subs!r}")  # B101 fix: assert stripped in -O
 
     def test_request_correlates_response_by_transaction(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
@@ -205,8 +206,10 @@ class TestBridgeClient:
         with c as client:
             resp = client.request("device/rename",
                                    payload={"from": "A", "to": "B"})
-            assert resp["status"] == "ok"
-            assert resp["data"]["echo"] == "device/rename"
+            if resp["status"] != "ok":
+                raise ValueError(f"expected status ok, got {resp["status"]!r}")  # B101 fix: assert stripped in -O
+            if resp["data"]["echo"] != "device/rename":
+                raise ValueError(f'expected echo "device/rename", got {resp["data"]["echo"]!r}')  # B101 fix: assert stripped in -O
 
     def test_request_raises_on_error_status(self, fake_paho, monkeypatch):
         """If z2m returns status=error, BridgeClient.request should raise."""
@@ -259,8 +262,10 @@ class TestBridgeClient:
         published = client.client.published  # type: ignore[attr-defined]
         # last publish should be the device set
         last_topic, last_payload, _, _ = published[-1]
-        assert last_topic == "z2m/Lounge Lamp/set"
-        assert json.loads(last_payload) == {"state": "ON"}
+        if last_topic != "z2m/Lounge Lamp/set":
+            raise ValueError(f"expected topic z2m/Lounge Lamp/set, got {last_topic!r}")  # B101 fix: assert stripped in -O
+        if json.loads(last_payload) != {"state": "ON"}:
+            raise ValueError(f'expected payload {{"state": "ON"}}, got {json.loads(last_payload)!r}')  # B101 fix: assert stripped in -O
 
     def test_on_message_logs_failing_callback(self, fake_paho, caplog):
         """Regression: subscriber callbacks that raise must be logged, not silently swallowed.
@@ -291,8 +296,9 @@ class TestBridgeClient:
         with caplog.at_level(logging.WARNING, logger="cli_anything.zigbee2mqtt.core.mqtt_client"):
             c._on_message(None, None, FakeMsg())  # type: ignore[arg-type]
 
-        assert any("boom" in record.message for record in caplog.records), \
-            "Expected a log record containing 'boom' from the failing callback"
+        if not any("boom" in record.message for record in caplog.records):
+            raise ValueError("Expected a log record containing 'boom' from the failing callback")  # B101 fix: assert stripped in -O
+
 
 
 
@@ -311,7 +317,8 @@ class TestMqttClientNoDeadCode:
         imports = [n.names[0].name for n in ast.walk(tree)
                    if isinstance(n, ast.Import) and
                       any(x.name == 'time' for x in n.names)]
-        assert not imports, f"'time' module still imported: {imports}"
+        if imports:
+            raise ValueError(f"'time' module still imported: {imports}")  # B101 fix: assert stripped in -O
 
     def test_no_time_attribute_used(self):
         """No code in mqtt_client.py must call time.sleep / time.time / etc."""
@@ -324,15 +331,18 @@ class TestMqttClientNoDeadCode:
                if (isinstance(n, ast.Attribute)
                    and isinstance(n.value, ast.Name)
                    and n.value.id == 'time')]
-        assert not bad, f"time module still used: {bad}"
+        if bad:
+            raise ValueError(f"time module still used: {bad}")  # B101 fix: assert stripped in -O
 
     def test_no_useless_instance_vars(self, fake_paho):
         """_username and _password must not be stored as dead instance vars."""
         # Import inside test so fake_paho fixture has already patched mc.mqtt
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
         c = mc.BridgeClient("fake-host")
-        assert not hasattr(c, '_username'), "_username is a dead instance var"
-        assert not hasattr(c, '_password'), "_password is a dead instance var"
+        if hasattr(c, '_username'):
+            raise ValueError("_username is a dead instance var")  # B101 fix: assert stripped in -O
+        if hasattr(c, '_password'):
+            raise ValueError("_password is a dead instance var")  # B101 fix: assert stripped in -O
 
     def test_pending_dict_no_path_key(self):
         """The 'path' key must not be stored in _pending (unused once stored)."""
@@ -340,5 +350,6 @@ class TestMqttClientNoDeadCode:
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
         src = inspect.getsource(mc)
         # _pending[txn] = {…} must contain only 'event' and 'slot'
-        assert '_pending[txn] = {"event": event, "slot": slot}' in src, \
-            "_pending must only contain 'event' and 'slot' keys"
+        if '_pending[txn] = {"event": event, "slot": slot}' not in src:
+            raise ValueError("_pending must only contain 'event' and 'slot' keys")  # B101 fix: assert stripped in -O
+
