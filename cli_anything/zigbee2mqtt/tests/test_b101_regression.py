@@ -71,7 +71,10 @@ class TestB101Mechanism:
             raise AssertionError(
                 f"With -O flag, if/raise must be preserved: rc={result.returncode}, stdout={result.stdout}"
             )
-        assert "ValueError" in result.stderr or "this runs" in result.stderr
+        if "ValueError" not in result.stderr and "this runs" not in result.stderr:
+            raise AssertionError(
+                f"Expected ValueError or 'this runs' in stderr, got: {result.stderr!r}"
+            )
 
     def test_assert_silently_passes_on_wrong_value_in_optimized_mode(self):
         """
@@ -82,8 +85,14 @@ class TestB101Mechanism:
         # With -O, assert False is removed, so no error is raised
         code = 'WRONG = 42; assert WRONG == 0; print("OK")'
         result = _run_optimized(code)
-        assert result.returncode == 0, "With -O, assert is stripped so this passes"
-        assert "OK" in result.stdout
+        if result.returncode != 0:
+            raise AssertionError(
+                f"With -O, assert is stripped so this should pass, got rc={result.returncode}, stderr={result.stderr!r}"
+            )
+        if "OK" not in result.stdout:
+            raise AssertionError(
+                f"Expected 'OK' in stdout, got: {result.stdout!r}"
+            )
 
 
 class TestB101FixesWorkInNormalMode:
@@ -252,3 +261,82 @@ class TestB101RegressionFixes:
             raised = True
         if not raised:
             raise AssertionError("if/raise nonzero-returncode check did not raise")
+
+
+class TestB101FixesLines74_85_86:
+    """Regression tests for the three B101 fixes at former lines 74, 85, 86.
+
+    The original code used bare ``assert`` statements which are stripped under
+    ``python -O`` (the B101 vulnerability).  They were replaced with
+    ``if ...: raise AssertionError(...)`` so the checks survive optimised
+    byte-code compilation.  These tests confirm each replacement raises when
+    its condition is violated -- i.e. the check is real and not silently
+    removed -- and that it does NOT raise when the condition holds.
+    """
+
+    def test_line74_stderr_check_raises_when_both_tokens_absent(self):
+        """Former line-74 check raises when neither token is in stderr."""
+        result = _run_optimized('import sys; sys.exit(1)')  # empty stderr
+        raised = False
+        try:
+            if "ValueError" not in result.stderr and "this runs" not in result.stderr:
+                raise AssertionError(
+                    f"Expected ValueError or 'this runs' in stderr, got: {result.stderr!r}"
+                )
+        except AssertionError:
+            raised = True
+        if not raised:
+            raise AssertionError("line-74 if/raise check did not raise when both tokens absent")
+
+    def test_line74_stderr_check_passes_when_token_present(self):
+        """Former line-74 check does NOT raise when a token is present."""
+        result = _run_optimized('raise ValueError("this runs")')
+        # Should not raise: "this runs" is in stderr.
+        if "ValueError" not in result.stderr and "this runs" not in result.stderr:
+            raise AssertionError(
+                f"Expected ValueError or 'this runs' in stderr, got: {result.stderr!r}"
+            )
+
+    def test_line85_returncode_check_raises_on_nonzero(self):
+        """Former line-85 check raises when returncode != 0."""
+        result = _run_optimized('import sys; sys.exit(1)')  # returncode 1
+        raised = False
+        try:
+            if result.returncode != 0:
+                raise AssertionError(
+                    f"With -O, assert is stripped so this should pass, got rc={result.returncode}, stderr={result.stderr!r}"
+                )
+        except AssertionError:
+            raised = True
+        if not raised:
+            raise AssertionError("line-85 if/raise check did not raise on nonzero returncode")
+
+    def test_line85_returncode_check_passes_on_zero(self):
+        """Former line-85 check does NOT raise when returncode == 0."""
+        result = _run_optimized('print("OK")')  # returncode 0
+        if result.returncode != 0:
+            raise AssertionError(
+                f"With -O, assert is stripped so this should pass, got rc={result.returncode}, stderr={result.stderr!r}"
+            )
+
+    def test_line86_stdout_check_raises_when_ok_absent(self):
+        """Former line-86 check raises when 'OK' is not in stdout."""
+        result = _run_optimized('print("not ok")')  # no "OK" in stdout
+        raised = False
+        try:
+            if "OK" not in result.stdout:
+                raise AssertionError(
+                    f"Expected 'OK' in stdout, got: {result.stdout!r}"
+                )
+        except AssertionError:
+            raised = True
+        if not raised:
+            raise AssertionError("line-86 if/raise check did not raise when 'OK' absent")
+
+    def test_line86_stdout_check_passes_when_ok_present(self):
+        """Former line-86 check does NOT raise when 'OK' is in stdout."""
+        result = _run_optimized('print("OK")')
+        if "OK" not in result.stdout:
+            raise AssertionError(
+                f"Expected 'OK' in stdout, got: {result.stdout!r}"
+            )
