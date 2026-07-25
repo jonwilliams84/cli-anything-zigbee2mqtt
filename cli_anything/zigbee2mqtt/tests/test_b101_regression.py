@@ -114,10 +114,7 @@ print("OK")
 '''
         result = _run_in_subprocess(code)
         assert result.returncode == 0, f"Should pass with correct values: {result.stderr}"
-        if "OK" not in result.stdout:
-            raise AssertionError(
-                f"Expected 'OK' in stdout, got: {result.stdout!r}"
-            )
+        assert "OK" in result.stdout
 
     def test_merge_cli_ignores_none_wrong_values_detected(self):
         """Regression: wrong values in test_merge_cli_ignores_none raise ValueError."""
@@ -159,10 +156,7 @@ print("OK")
             f"With -O flag, if/raise must still work correctly: "
             f"rc={result.returncode}, stderr={result.stderr}, stdout={result.stdout}"
         )
-        if "OK" not in result.stdout:
-            raise AssertionError(
-                f"Expected 'OK' in stdout, got: {result.stdout!r}"
-            )
+        assert "OK" in result.stdout
 
     def test_merge_cli_ignores_none_wrong_values_detected_optimized(self):
         """Regression: wrong values in test_merge_cli_ignores_none raise ValueError in -O."""
@@ -195,10 +189,7 @@ print("OK")
 '''
         result = _run_optimized(code)
         assert result.returncode == 0
-        if "OK" not in result.stdout:
-            raise AssertionError(
-                f"Expected 'OK' in stdout, got: {result.stdout!r}"
-            )
+        assert "OK" in result.stdout
 
     def test_merge_cli_ignores_none_with_incorrect_type_fails_optimized(self):
         """Regression: check type failure in -O mode."""
@@ -277,16 +268,15 @@ class TestB101FixesLines74_85_86:
 
     The original code used bare ``assert`` statements which are stripped under
     ``python -O`` (the B101 vulnerability).  They were replaced with
-    ``if …: raise AssertionError(…)`` so the checks survive optimised byte-code
-    compilation.  These tests confirm each replacement raises when its
-    condition is violated — i.e. the check is real and not silently removed.
+    ``if ...: raise AssertionError(...)`` so the checks survive optimised
+    byte-code compilation.  These tests confirm each replacement raises when
+    its condition is violated -- i.e. the check is real and not silently
+    removed -- and that it does NOT raise when the condition holds.
     """
 
-    def test_line74_stderr_check_raises_when_both_absent(self):
-        """Former line-74 check: must raise when neither token is in stderr."""
-        # A subprocess that fails but prints neither token to stderr.
-        result = _run_optimized('import sys; sys.exit(1)')
-        # stderr is empty here, so the fixed check must raise.
+    def test_line74_stderr_check_raises_when_both_tokens_absent(self):
+        """Former line-74 check raises when neither token is in stderr."""
+        result = _run_optimized('import sys; sys.exit(1)')  # empty stderr
         raised = False
         try:
             if "ValueError" not in result.stderr and "this runs" not in result.stderr:
@@ -299,40 +289,39 @@ class TestB101FixesLines74_85_86:
             raise AssertionError("line-74 if/raise check did not raise when both tokens absent")
 
     def test_line74_stderr_check_passes_when_token_present(self):
-        """Former line-74 check: must NOT raise when a token is present."""
+        """Former line-74 check does NOT raise when a token is present."""
         result = _run_optimized('raise ValueError("this runs")')
-        # One token is present, so the check must not raise.
+        # Should not raise: "this runs" is in stderr.
         if "ValueError" not in result.stderr and "this runs" not in result.stderr:
             raise AssertionError(
-                f"Check should pass when token present, got stderr: {result.stderr!r}"
+                f"Expected ValueError or 'this runs' in stderr, got: {result.stderr!r}"
             )
 
-    def test_line85_returncode_zero_check_raises_when_nonzero(self):
-        """Former line-85 check: must raise when returncode != 0."""
-        result = _run_optimized('import sys; sys.exit(1)')
+    def test_line85_returncode_check_raises_on_nonzero(self):
+        """Former line-85 check raises when returncode != 0."""
+        result = _run_optimized('import sys; sys.exit(1)')  # returncode 1
         raised = False
         try:
             if result.returncode != 0:
                 raise AssertionError(
-                    f"With -O, assert is stripped so this should pass, "
-                    f"got rc={result.returncode}, stderr={result.stderr!r}"
+                    f"With -O, assert is stripped so this should pass, got rc={result.returncode}, stderr={result.stderr!r}"
                 )
         except AssertionError:
             raised = True
         if not raised:
             raise AssertionError("line-85 if/raise check did not raise on nonzero returncode")
 
-    def test_line85_returncode_zero_check_passes_when_zero(self):
-        """Former line-85 check: must NOT raise when returncode == 0."""
-        result = _run_optimized('print("OK")')
+    def test_line85_returncode_check_passes_on_zero(self):
+        """Former line-85 check does NOT raise when returncode == 0."""
+        result = _run_optimized('print("OK")')  # returncode 0
         if result.returncode != 0:
             raise AssertionError(
-                f"Check should pass when rc==0, got rc={result.returncode}"
+                f"With -O, assert is stripped so this should pass, got rc={result.returncode}, stderr={result.stderr!r}"
             )
 
     def test_line86_stdout_check_raises_when_ok_absent(self):
-        """Former line-86 check: must raise when 'OK' is not in stdout."""
-        result = _run_optimized('print("not ok")')
+        """Former line-86 check raises when 'OK' is not in stdout."""
+        result = _run_optimized('print("not ok")')  # no "OK" in stdout
         raised = False
         try:
             if "OK" not in result.stdout:
@@ -345,9 +334,9 @@ class TestB101FixesLines74_85_86:
             raise AssertionError("line-86 if/raise check did not raise when 'OK' absent")
 
     def test_line86_stdout_check_passes_when_ok_present(self):
-        """Former line-86 check: must NOT raise when 'OK' is in stdout."""
+        """Former line-86 check does NOT raise when 'OK' is in stdout."""
         result = _run_optimized('print("OK")')
         if "OK" not in result.stdout:
             raise AssertionError(
-                f"Check should pass when 'OK' present, got: {result.stdout!r}"
+                f"Expected 'OK' in stdout, got: {result.stdout!r}"
             )
