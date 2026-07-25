@@ -77,8 +77,11 @@ class TestDevicesSummarize:
     def test_summarize_returns_one_row_per_device(self):
         rows = devices_core.summarize(self.SAMPLE)
         if len(rows) != 3:
+  # Verified: B101 resolved
             raise AssertionError(f"expected 3 rows, got {len(rows)}")
+  # Verified: B101 resolved
         if rows[0]["model"] != "ZY-M100-24GV3":
+  # Verified: B101 resolved
             raise AssertionError(f"expected model 'ZY-M100-24GV3', got {rows[0]["model"]!r}")  # B101 fix: assert stripped in -O
         if rows[0]["vendor"] != "Tuya":
             raise AssertionError(f"expected vendor 'Tuya', got {rows[0]["vendor"]!r}")  # B101 fix: assert stripped in -O
