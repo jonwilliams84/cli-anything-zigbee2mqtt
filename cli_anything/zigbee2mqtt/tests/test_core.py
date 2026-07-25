@@ -92,8 +92,16 @@ class TestDevicesSummarize:
     def test_summarize_handles_missing_definition(self):
         rows = devices_core.summarize(self.SAMPLE)
         last = rows[-1]
-        assert last["model"] is None
-        assert last["vendor"] is None
+        # B101 fix: assert is stripped when compiling to optimised byte code
+        # (-O); use if/raise so the check survives optimised compilation.
+        if last["model"] is not None:
+            raise AssertionError(
+                f"expected model None, got {last['model']!r}"
+            )
+        if last["vendor"] is not None:
+            raise AssertionError(
+                f"expected vendor None, got {last['vendor']!r}"
+            )
         assert last["interview_completed"] is False
 
 
