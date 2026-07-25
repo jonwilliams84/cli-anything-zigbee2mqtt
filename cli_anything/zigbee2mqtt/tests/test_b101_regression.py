@@ -113,8 +113,12 @@ if cfg["base_topic"] != "bb":
 print("OK")
 '''
         result = _run_in_subprocess(code)
-        assert result.returncode == 0, f"Should pass with correct values: {result.stderr}"
-        assert "OK" in result.stdout
+        if result.returncode != 0:
+            raise AssertionError(
+                f"Should pass with correct values: {result.stderr}"
+            )
+        if "OK" not in result.stdout:
+            raise AssertionError("Expected 'OK' in stdout")
 
     def test_merge_cli_ignores_none_wrong_values_detected(self):
         """Regression: wrong values in test_merge_cli_ignores_none raise ValueError."""
@@ -129,9 +133,16 @@ if cfg["mqtt_host"] != "WRONG":
 print("FAIL: should have raised")
 '''
         result = _run_in_subprocess(code)
-        assert result.returncode != 0, "Wrong expected value must raise ValueError"
-        assert "ValueError" in result.stderr
-        assert "expected mqtt_host" in result.stderr
+        if result.returncode == 0:
+            raise AssertionError("Wrong expected value must raise ValueError")
+        if "ValueError" not in result.stderr:
+            raise AssertionError(
+                f"Expected 'ValueError' in stderr, got: {result.stderr!r}"
+            )
+        if "expected mqtt_host" not in result.stderr:
+            raise AssertionError(
+                f"Expected 'expected mqtt_host' in stderr, got: {result.stderr!r}"
+            )
 
 
 class TestB101FixesWorkInOptimizedMode:
