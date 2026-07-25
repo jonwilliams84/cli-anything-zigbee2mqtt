@@ -76,9 +76,12 @@ class TestDevicesSummarize:
 
     def test_summarize_returns_one_row_per_device(self):
         rows = devices_core.summarize(self.SAMPLE)
-        assert len(rows) == 3
-        assert rows[0]["model"] == "ZY-M100-24GV3"
-        assert rows[0]["vendor"] == "Tuya"
+        if len(rows) != 3:
+            raise AssertionError(f"expected 3 rows, got {len(rows)}")
+        if rows[0]["model"] != "ZY-M100-24GV3":
+            raise AssertionError(f"expected model 'ZY-M100-24GV3', got {rows[0]["model"]!r}")  # B101 fix: assert stripped in -O
+        if rows[0]["vendor"] != "Tuya":
+            raise AssertionError(f"expected vendor 'Tuya', got {rows[0]["vendor"]!r}")  # B101 fix: assert stripped in -O
 
     def test_summarize_handles_missing_definition(self):
         rows = devices_core.summarize(self.SAMPLE)

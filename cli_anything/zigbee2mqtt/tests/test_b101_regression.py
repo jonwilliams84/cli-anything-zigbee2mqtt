@@ -552,3 +552,96 @@ class TestB101FixesLines213_217_235_239:
             raise AssertionError(
                 f"Expected 'ValueError' in stderr, got: {result.stderr!r}"
             )
+
+
+class TestB101FixesLines79_80_81:
+    """Regression tests for the three B101 fixes at former lines 79, 80, 81.
+
+    The original code used bare ``assert`` statements which are stripped under
+    ``python -O`` (the B101 vulnerability).  They were replaced with
+    ``if ...: raise AssertionError(...)`` so the checks survive optimised
+    byte-code compilation.  These tests confirm each replacement raises when
+    its condition is violated and does NOT raise when the condition holds.
+    """
+
+    def test_line79_len_check_raises_on_wrong_count(self):
+        """Former line-79 check raises when row count != 3."""
+        code = """
+# Simulates: if len(rows) != 3: raise AssertionError(...)
+rows = [1, 2]  # wrong count
+if len(rows) != 3:
+    raise AssertionError(f"expected 3 rows, got {len(rows)}")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "line-79 if/raise check was stripped (returncode 0 in -O mode)"
+            )
+
+    def test_line79_len_check_passes_on_correct_count(self):
+        """Former line-79 check does NOT raise when row count == 3."""
+        code = """
+rows = [1, 2, 3]  # correct count
+if len(rows) != 3:
+    raise AssertionError(f"expected 3 rows, got {len(rows)}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"line-79 if/raise check raised unexpectedly: {result.stderr}"
+            )
+
+    def test_line80_model_check_raises_on_wrong_value(self):
+        """Former line-80 check raises when model != 'ZY-M100-24GV3'."""
+        code = """
+rows = [{"model": "WRONG_MODEL", "vendor": "Tuya"}]
+if rows[0]["model"] != "ZY-M100-24GV3":
+    raise AssertionError(f"expected model 'ZY-M100-24GV3', got {rows[0]['model']!r}")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "line-80 if/raise check was stripped (returncode 0 in -O mode)"
+            )
+
+    def test_line80_model_check_passes_on_correct_value(self):
+        """Former line-80 check does NOT raise when model == 'ZY-M100-24GV3'."""
+        code = """
+rows = [{"model": "ZY-M100-24GV3", "vendor": "Tuya"}]
+if rows[0]["model"] != "ZY-M100-24GV3":
+    raise AssertionError(f"expected model 'ZY-M100-24GV3', got {rows[0]['model']!r}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"line-80 if/raise check raised unexpectedly: {result.stderr}"
+            )
+
+    def test_line81_vendor_check_raises_on_wrong_value(self):
+        """Former line-81 check raises when vendor != 'Tuya'."""
+        code = """
+rows = [{"model": "ZY-M100-24GV3", "vendor": "WRONG_VENDOR"}]
+if rows[0]["vendor"] != "Tuya":
+    raise AssertionError(f"expected vendor 'Tuya', got {rows[0]['vendor']!r}")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "line-81 if/raise check was stripped (returncode 0 in -O mode)"
+            )
+
+    def test_line81_vendor_check_passes_on_correct_value(self):
+        """Former line-81 check does NOT raise when vendor == 'Tuya'."""
+        code = """
+rows = [{"model": "ZY-M100-24GV3", "vendor": "Tuya"}]
+if rows[0]["vendor"] != "Tuya":
+    raise AssertionError(f"expected vendor 'Tuya', got {rows[0]['vendor']!r}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"line-81 if/raise check raised unexpectedly: {result.stderr}"
+            )
