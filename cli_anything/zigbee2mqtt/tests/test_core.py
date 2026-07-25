@@ -232,7 +232,12 @@ class TestBridgeClient:
                 raise AssertionError(
                     f"expected status 'ok', got {resp['status']!r}"
                 )
-            assert resp["data"]["echo"] == "device/rename"
+            # B101 fix: assert is stripped when compiling to optimised byte code (-O);
+            # use if/raise so the check survives optimised compilation.
+            if resp["data"]["echo"] != "device/rename":
+                raise AssertionError(
+                    f"expected echo 'device/rename', got {resp['data']['echo']!r}"
+                )
 
     def test_request_raises_on_error_status(self, fake_paho, monkeypatch):
         """If z2m returns status=error, BridgeClient.request should raise."""
@@ -285,8 +290,19 @@ class TestBridgeClient:
         published = client.client.published  # type: ignore[attr-defined]
         # last publish should be the device set
         last_topic, last_payload, _, _ = published[-1]
-        assert last_topic == "z2m/Lounge Lamp/set"
-        assert json.loads(last_payload) == {"state": "ON"}
+        # B101 fix: assert is stripped when compiling to optimised byte code (-O);
+        # use if/raise so the check survives optimised compilation.
+        if last_topic != "z2m/Lounge Lamp/set":
+            raise AssertionError(
+                f"expected topic 'z2m/Lounge Lamp/set', got {last_topic!r}"
+            )
+        # B101 fix: assert is stripped when compiling to optimised byte code (-O);
+        # use if/raise so the check survives optimised compilation.
+        if json.loads(last_payload) != {"state": "ON"}:
+            raise AssertionError(
+                f"expected payload {{'state': 'ON'}}, "
+                f"got {json.loads(last_payload)!r}"
+            )
 
     def test_on_message_logs_failing_callback(self, fake_paho, caplog):
         """Regression: subscriber callbacks that raise must be logged, not silently swallowed.

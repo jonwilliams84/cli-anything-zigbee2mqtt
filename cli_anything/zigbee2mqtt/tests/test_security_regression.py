@@ -180,3 +180,100 @@ class TestK8sSubprocessLazyImport:
                 assert "B603" in line or "nosec" in line.lower(), (
                     f"subprocess.run at line {node.lineno} lacks nosec: {line!r}"
                 )
+
+
+# ── B101: assert used in test assertions ─────────────────────────────────────
+
+class TestB101AssertsReplacedWithIfRaise:
+    """Regression: bare ``assert`` in test_core.py must be replaced with
+    ``if condition: raise AssertionError(...)`` so they survive optimised
+    compilation (bandit B101).
+
+    The three originally reported locations were:
+      - test_core.py:235  inside test_request_correlates_response_by_transaction
+      - test_core.py:288  inside test_publish_topic_format
+      - test_core.py:289  inside test_publish_topic_format
+    """
+
+    def test_no_assert_in_test_core(self):
+        """test_core.py must contain no bare ``assert`` statements."""
+        import ast, inspect
+        from cli_anything.zigbee2mqtt.tests import test_core as tc
+
+        src = inspect.getsource(tc)
+        tree = ast.parse(src)
+
+        bare_asserts = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assert):
+                bare_asserts.append(node.lineno)
+
+        # Lines 235, 288, 289 were the three originally reported.
+        # Additional asserts may exist (not a regression failure per se,
+        # but the original three must be gone).
+        assert 235 not in bare_asserts, (
+            "assert at line 235 still present — B101 not fixed"
+        )
+        assert 288 not in bare_asserts, (
+            "assert at line 288 still present — B101 not fixed"
+        )
+        assert 289 not in bare_asserts, (
+            "assert at line 289 still present — B101 not fixed"
+        )
+
+    def test_if_raise_pattern_at_line_235(self):
+        """Line 235 area must use ``if/raise`` instead of bare assert."""
+        import ast, inspect
+        from cli_anything.zigbee2mqtt.tests import test_core as tc
+
+        src = inspect.getsource(tc)
+        lines = src.splitlines()
+
+        # Find the block around the echo check in test_request_correlates_response_by_transaction
+        # It should read:  if resp["data"]["echo"] != "device/rename": raise AssertionError(...)
+        found = False
+        for i, line in enumerate(lines):
+            if 'resp["data"]["echo"]' in line:
+                # Next non-blank line should be raise AssertionError
+                for j in range(i + 1, min(i + 4, len(lines))):
+                    if "raise AssertionError" in lines[j]:
+                        found = True
+                        break
+                if found:
+                    break
+
+        assert found, (
+            "if/raise pattern for echo check not found near line 235 — "
+            "B101 regression test failed"
+        )
+
+    def test_if_raise_pattern_at_line_288_289(self):
+        """Lines 288-289 area must use ``if/raise`` instead of bare assert."""
+        import ast, inspect
+        from cli_anything.zigbee2mqtt.tests import test_core as tc
+
+        src = inspect.getsource(tc)
+        lines = src.splitlines()
+
+        # Find the block with last_topic check
+        topic_found = payload_found = False
+        for i, line in enumerate(lines):
+            if 'last_topic != "z2m/Lounge Lamp/set"' in line or \
+               "last_topic != 'z2m/Lounge Lamp/set'" in line:
+                for j in range(i, min(i + 3, len(lines))):
+                    if "raise AssertionError" in lines[j]:
+                        topic_found = True
+                        break
+            if '{"state": "ON"}' in line and "json.loads(last_payload)" in line:
+                # The if condition line for payload
+                if "!=" in line:
+                    payload_found = True
+
+        assert topic_found, (
+            "if/raise pattern for last_topic not found near lines 288-289 — "
+            "B101 regression test failed"
+        )
+        assert payload_found, (
+            "if/raise pattern for json.loads(last_payload) check not found — "
+            "B101 regression test failed"
+        )
