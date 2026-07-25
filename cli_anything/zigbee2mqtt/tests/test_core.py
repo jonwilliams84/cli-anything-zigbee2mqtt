@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import pytest
 
 from cli_anything.zigbee2mqtt.core import devices as devices_core
@@ -15,6 +14,7 @@ from cli_anything.zigbee2mqtt.core import project
 
 
 # ── project profile ─────────────────────────────────────────────────────────
+
 
 class TestProject:
     def test_defaults_when_no_file(self, tmp_path):
@@ -58,20 +58,36 @@ class TestProject:
 
 # ── devices summarize ───────────────────────────────────────────────────────
 
+
 class TestDevicesSummarize:
     SAMPLE = [
-        {"friendly_name": "Front Sensor", "ieee_address": "0xa4c138...",
-         "type": "EndDevice", "supported": True, "interview_completed": True,
-         "manufacturer": "_TZE204_ya4ft0w4",
-         "power_source": "Mains (single phase)",
-         "definition": {"model": "ZY-M100-24GV3", "vendor": "Tuya"}},
-        {"friendly_name": "Lounge Lamp", "ieee_address": "0xa4c1382132ff0994",
-         "type": "Router", "supported": True, "interview_completed": True,
-         "manufacturer": "Philips",
-         "definition": {"model": "LCT001", "vendor": "Philips"}},
+        {
+            "friendly_name": "Front Sensor",
+            "ieee_address": "0xa4c138...",
+            "type": "EndDevice",
+            "supported": True,
+            "interview_completed": True,
+            "manufacturer": "_TZE204_ya4ft0w4",
+            "power_source": "Mains (single phase)",
+            "definition": {"model": "ZY-M100-24GV3", "vendor": "Tuya"},
+        },
+        {
+            "friendly_name": "Lounge Lamp",
+            "ieee_address": "0xa4c1382132ff0994",
+            "type": "Router",
+            "supported": True,
+            "interview_completed": True,
+            "manufacturer": "Philips",
+            "definition": {"model": "LCT001", "vendor": "Philips"},
+        },
         # one row without a definition (unsupported / unknown)
-        {"friendly_name": "Mystery", "ieee_address": "0xdead", "type": "Unknown",
-         "interview_completed": False, "supported": False},
+        {
+            "friendly_name": "Mystery",
+            "ieee_address": "0xdead",
+            "type": "Unknown",
+            "interview_completed": False,
+            "supported": False,
+        },
     ]
 
     def test_summarize_returns_one_row_per_device(self):
@@ -81,13 +97,9 @@ class TestDevicesSummarize:
         if len(rows) != 3:
             raise AssertionError(f"expected 3 rows, got {len(rows)}")
         if rows[0]["model"] != "ZY-M100-24GV3":
-            raise AssertionError(
-                f"expected model 'ZY-M100-24GV3', got {rows[0]['model']!r}"
-            )
+            raise AssertionError(f"expected model 'ZY-M100-24GV3', got {rows[0]['model']!r}")
         if rows[0]["vendor"] != "Tuya":
-            raise AssertionError(
-                f"expected vendor 'Tuya', got {rows[0]['vendor']!r}"
-            )
+            raise AssertionError(f"expected vendor 'Tuya', got {rows[0]['vendor']!r}")
 
     def test_summarize_handles_missing_definition(self):
         rows = devices_core.summarize(self.SAMPLE)
@@ -95,13 +107,9 @@ class TestDevicesSummarize:
         # B101 fix: assert is stripped when compiling to optimised byte code
         # (-O); use if/raise so the check survives optimised compilation.
         if last["model"] is not None:
-            raise AssertionError(
-                f"expected model None, got {last['model']!r}"
-            )
+            raise AssertionError(f"expected model None, got {last['model']!r}")
         if last["vendor"] is not None:
-            raise AssertionError(
-                f"expected vendor None, got {last['vendor']!r}"
-            )
+            raise AssertionError(f"expected vendor None, got {last['vendor']!r}")
         # B101 fix: assert is stripped when compiling to optimised byte code (-O);
         # use if/raise so the check survives optimised compilation.
         if last["interview_completed"] is not False:
@@ -111,6 +119,7 @@ class TestDevicesSummarize:
 
 
 # ── BridgeClient (fake transport) ───────────────────────────────────────────
+
 
 class FakeMqttClient:
     """Minimum surface to satisfy paho.mqtt.Client usage in BridgeClient.
@@ -161,20 +170,22 @@ class FakeMqttClient:
                 data = {}
             txn = data.get("transaction")
             resp_topic = topic.replace("/request/", "/response/")
-            resp = {"status": "ok", "data": {"echo": req_path},
-                    "transaction": txn}
+            resp = {"status": "ok", "data": {"echo": req_path}, "transaction": txn}
 
             class FakeMsg:
                 def __init__(self, t, p):
                     self.topic = t
                     self.payload = json.dumps(p).encode()
+
             if self.on_message:
                 self.on_message(self, None, FakeMsg(resp_topic, resp))
 
         class Info:
             rc = 0
+
             def wait_for_publish(self, timeout=None):
                 return None
+
         return Info()
 
 
@@ -182,6 +193,7 @@ class FakeMqttClient:
 def fake_paho(monkeypatch):
     """Swap paho.mqtt.client.Client for FakeMqttClient inside mqtt_client.py."""
     from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
     real_mqtt = mc.mqtt
 
     class FakeMqttModule:
@@ -199,7 +211,7 @@ def fake_paho(monkeypatch):
                 tparts = topic.split("/")
                 if len(fparts) != len(tparts):
                     return False
-                return all(f == "+" or f == t for f, t in zip(fparts, tparts))
+                return all(f == "+" or f == t for f, t in zip(fparts, tparts, strict=False))
             return False
 
     monkeypatch.setattr(mc, "mqtt", FakeMqttModule)
@@ -210,65 +222,63 @@ def fake_paho(monkeypatch):
 class TestBridgeClient:
     def test_connect_subscribes_to_response(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
         c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
         c.connect()
         subs = c.client.subscriptions  # type: ignore[attr-defined]
         # B101 fix: assert is stripped when compiling to optimised byte code (-O);
         # use if/raise so the check survives optimised compilation.
         if not any("/bridge/response/#" in s for s in subs):
-            raise AssertionError(
-                "expected subscription to '/bridge/response/#' in " + str(subs)
-            )
+            raise AssertionError("expected subscription to '/bridge/response/#' in " + str(subs))
 
     def test_request_correlates_response_by_transaction(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
         c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
         with c as client:
-            resp = client.request("device/rename",
-                                   payload={"from": "A", "to": "B"})
+            resp = client.request("device/rename", payload={"from": "A", "to": "B"})
             # B101 fix: assert is stripped when compiling to optimised byte code (-O);
             # use if/raise so the check survives optimised compilation.
             if resp["status"] != "ok":
-                raise AssertionError(
-                    f"expected status 'ok', got {resp['status']!r}"
-                )
+                raise AssertionError(f"expected status 'ok', got {resp['status']!r}")
             # B101 fix: assert is stripped when compiling to optimised byte code (-O);
             # use if/raise so the check survives optimised compilation.
             if resp["data"]["echo"] != "device/rename":
-                raise AssertionError(
-                    f"expected echo 'device/rename', got {resp['data']['echo']!r}"
-                )
+                raise AssertionError(f"expected echo 'device/rename', got {resp['data']['echo']!r}")
 
     def test_request_raises_on_error_status(self, fake_paho, monkeypatch):
         """If z2m returns status=error, BridgeClient.request should raise."""
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
         # patch FakeMqttClient.publish to return an error response
         orig_publish = FakeMqttClient.publish
 
         def err_publish(self, topic, payload, qos=0, retain=False):
             self.published.append((topic, payload, qos, retain))
             if "/bridge/request/" in topic:
-                req_path = topic.split("/bridge/request/", 1)[1]
+                topic.split("/bridge/request/", 1)[1]
                 try:
                     data = json.loads(payload)
                 except Exception:
                     data = {}
                 txn = data.get("transaction")
                 resp_topic = topic.replace("/request/", "/response/")
-                resp = {"status": "error", "error": "boom",
-                        "transaction": txn}
+                resp = {"status": "error", "error": "boom", "transaction": txn}
 
                 class FakeMsg:
                     def __init__(self, t, p):
                         self.topic = t
                         self.payload = json.dumps(p).encode()
+
                 if self.on_message:
                     self.on_message(self, None, FakeMsg(resp_topic, resp))
 
             class Info:
                 rc = 0
+
                 def wait_for_publish(self, timeout=None):
                     return None
+
             return Info()
 
         monkeypatch.setattr(FakeMqttClient, "publish", err_publish, raising=True)
@@ -276,14 +286,14 @@ class TestBridgeClient:
         c = mc.BridgeClient("fake-host", base_topic="zigbee2mqtt")
         with c as client:
             with pytest.raises(mc.MqttError, match="boom"):
-                client.request("device/rename",
-                                payload={"from": "A", "to": "B"})
+                client.request("device/rename", payload={"from": "A", "to": "B"})
 
         monkeypatch.setattr(FakeMqttClient, "publish", orig_publish, raising=True)
 
     def test_publish_topic_format(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
         from cli_anything.zigbee2mqtt.core import devices
+
         c = BridgeClient("fake-host", base_topic="z2m")
         with c as client:
             devices.set_value(client, "Lounge Lamp", {"state": "ON"})
@@ -293,15 +303,12 @@ class TestBridgeClient:
         # B101 fix: assert is stripped when compiling to optimised byte code (-O);
         # use if/raise so the check survives optimised compilation.
         if last_topic != "z2m/Lounge Lamp/set":
-            raise AssertionError(
-                f"expected topic 'z2m/Lounge Lamp/set', got {last_topic!r}"
-            )
+            raise AssertionError(f"expected topic 'z2m/Lounge Lamp/set', got {last_topic!r}")
         # B101 fix: assert is stripped when compiling to optimised byte code (-O);
         # use if/raise so the check survives optimised compilation.
         if json.loads(last_payload) != {"state": "ON"}:
             raise AssertionError(
-                f"expected payload {{'state': 'ON'}}, "
-                f"got {json.loads(last_payload)!r}"
+                f"expected payload {{'state': 'ON'}}, got {json.loads(last_payload)!r}"
             )
 
     def test_on_message_logs_failing_callback(self, fake_paho, caplog):
@@ -339,36 +346,45 @@ class TestBridgeClient:
             )
 
 
-
-
 # ── Regression: dead-code removals in mqtt_client.py ────────────────────────
+
 
 class TestMqttClientNoDeadCode:
     """Regression tests: ensure the three dead-code findings stay gone."""
 
     def test_no_time_module_imported(self):
         """The `time` module must not be imported in mqtt_client.py."""
-        import ast, inspect
+        import ast
+        import inspect
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
         src = inspect.getsource(mc)
         tree = ast.parse(src)
-        imports = [n.names[0].name for n in ast.walk(tree)
-                   if isinstance(n, ast.Import) and
-                      any(x.name == 'time' for x in n.names)]
+        imports = [
+            n.names[0].name
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Import) and any(x.name == "time" for x in n.names)
+        ]
         if imports:
             raise AssertionError(f"'time' module still imported: {imports}")
 
     def test_no_time_attribute_used(self):
         """No code in mqtt_client.py must call time.sleep / time.time / etc."""
-        import ast, inspect
+        import ast
+        import inspect
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
         src = inspect.getsource(mc)
         tree = ast.parse(src)
-        bad = [f"line {n.lineno}: time.{n.attr}"
-               for n in ast.walk(tree)
-               if (isinstance(n, ast.Attribute)
-                   and isinstance(n.value, ast.Name)
-                   and n.value.id == 'time')]
+        bad = [
+            f"line {n.lineno}: time.{n.attr}"
+            for n in ast.walk(tree)
+            if (
+                isinstance(n, ast.Attribute)
+                and isinstance(n.value, ast.Name)
+                and n.value.id == "time"
+            )
+        ]
         if bad:
             raise AssertionError(f"time module still used: {bad}")
 
@@ -376,18 +392,21 @@ class TestMqttClientNoDeadCode:
         """_username and _password must not be stored as dead instance vars."""
         # Import inside test so fake_paho fixture has already patched mc.mqtt
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
         c = mc.BridgeClient("fake-host")
-        assert not hasattr(c, '_username'), "_username is a dead instance var"
-        assert not hasattr(c, '_password'), "_password is a dead instance var"
+        assert not hasattr(c, "_username"), "_username is a dead instance var"
+        assert not hasattr(c, "_password"), "_password is a dead instance var"
 
     def test_pending_dict_no_path_key(self):
         """The 'path' key must not be stored in _pending (unused once stored)."""
         import inspect
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
+
         src = inspect.getsource(mc)
         # _pending[txn] = {…} must contain only 'event' and 'slot'
-        assert '_pending[txn] = {"event": event, "slot": slot}' in src, \
+        assert '_pending[txn] = {"event": event, "slot": slot}' in src, (
             "_pending must only contain 'event' and 'slot' keys"
+        )
 
 
 # ── Regression tests for B101 fixes ─────────────────────────────────────────
@@ -425,9 +444,7 @@ class TestB101FixRegressionBridgeResponseSubscription:
         # Success path: subscription is present
         subs = ["zigbee2mqtt/bridge/response/#", "zigbee2mqtt/some/other"]
         if not any("/bridge/response/#" in s for s in subs):
-            raise AssertionError(
-                "expected subscription to '/bridge/response/#' in " + str(subs)
-            )
+            raise AssertionError("expected subscription to '/bridge/response/#' in " + str(subs))
 
     def test_bridge_response_subscription_raises_on_missing(self):
         # Failure path: subscription is absent, must raise
@@ -446,19 +463,14 @@ class TestB101FixRegressionStatusOk:
         # Success path: status is "ok"
         resp = {"status": "ok", "data": {"echo": "test"}}
         if resp["status"] != "ok":
-            raise AssertionError(
-                f"expected status 'ok', got {resp['status']!r}"
-            )
+            raise AssertionError(f"expected status 'ok', got {resp['status']!r}")
 
     def test_status_ok_raises_on_error(self):
         # Failure path: status is "error", must raise
         resp = {"status": "error"}
         with pytest.raises(AssertionError, match="expected status 'ok'"):
             if resp["status"] != "ok":
-                raise AssertionError(
-                    f"expected status 'ok', got {resp['status']!r}"
-                )
-
+                raise AssertionError(f"expected status 'ok', got {resp['status']!r}")
 
 
 class TestB101FixRegressionLogRecordCheck:
@@ -469,6 +481,7 @@ class TestB101FixRegressionLogRecordCheck:
         class FakeRecord:
             def __init__(self, msg):
                 self.message = msg
+
         records = [FakeRecord("something happened"), FakeRecord("callback raised boom error")]
         if not any("boom" in record.message for record in records):
             raise AssertionError(
@@ -480,6 +493,7 @@ class TestB101FixRegressionLogRecordCheck:
         class FakeRecord:
             def __init__(self, msg):
                 self.message = msg
+
         records = [FakeRecord("all good"), FakeRecord("no error here")]
         with pytest.raises(AssertionError, match="Expected a log record containing 'boom'"):
             if not any("boom" in record.message for record in records):

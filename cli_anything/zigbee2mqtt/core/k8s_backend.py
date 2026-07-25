@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import subprocess  # nosec B404
+    pass  # nosec B404
 
 
 @dataclass(frozen=True)
@@ -33,28 +33,33 @@ def _kubectl() -> str:
     return path
 
 
-def _run(args: list[str], *, stdin: Optional[bytes] = None,
-          check: bool = True):
+def _run(args: list[str], *, stdin: Optional[bytes] = None, check: bool = True):
     # subprocess imported lazily inside the function to avoid module-level B404;
     # argv is built from validated K8sTarget fields, not user input
     import subprocess  # nosec B404
+
     kc = _kubectl()
     proc = subprocess.run(  # nosec B603
-        [kc, *args], input=stdin, capture_output=True, text=False, check=False,
+        [kc, *args],
+        input=stdin,
+        capture_output=True,
+        text=False,
+        check=False,
     )
     if check and proc.returncode != 0:
         stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-        raise RuntimeError(
-            f"kubectl {' '.join(args)} failed (exit {proc.returncode}): {stderr}"
-        )
+        raise RuntimeError(f"kubectl {' '.join(args)} failed (exit {proc.returncode}): {stderr}")
     return proc
 
 
-def exec_(target: K8sTarget, argv: list[str], *,
-          stdin: Optional[str] = None, check: bool = True):
+def exec_(target: K8sTarget, argv: list[str], *, stdin: Optional[str] = None, check: bool = True):
     args = [
-        "-n", target.namespace, "exec",
-        f"deploy/{target.deployment}", "-c", target.container,
+        "-n",
+        target.namespace,
+        "exec",
+        f"deploy/{target.deployment}",
+        "-c",
+        target.container,
     ]
     if stdin is not None:
         args.append("-i")
@@ -66,26 +71,41 @@ def exec_(target: K8sTarget, argv: list[str], *,
 
 def restart(target: K8sTarget) -> None:
     """Trigger a rolling restart of the z2m deployment."""
-    _run([
-        "-n", target.namespace, "rollout", "restart",
-        f"deployment/{target.deployment}",
-    ], check=True)
+    _run(
+        [
+            "-n",
+            target.namespace,
+            "rollout",
+            "restart",
+            f"deployment/{target.deployment}",
+        ],
+        check=True,
+    )
 
 
 def rollout_status(target: K8sTarget, timeout: str = "180s") -> str:
-    proc = _run([
-        "-n", target.namespace, "rollout", "status",
-        f"deployment/{target.deployment}", f"--timeout={timeout}",
-    ], check=False)
+    proc = _run(
+        [
+            "-n",
+            target.namespace,
+            "rollout",
+            "status",
+            f"deployment/{target.deployment}",
+            f"--timeout={timeout}",
+        ],
+        check=False,
+    )
     out = (proc.stdout or b"").decode("utf-8", errors="replace")
     err = (proc.stderr or b"").decode("utf-8", errors="replace")
     return out + err
 
 
 def list_external_converters(target: K8sTarget) -> list[str]:
-    proc = exec_(target, ["sh", "-c",
-                           f"ls -1 {target.data_path}/external_converters 2>/dev/null"],
-                  check=False)
+    proc = exec_(
+        target,
+        ["sh", "-c", f"ls -1 {target.data_path}/external_converters 2>/dev/null"],
+        check=False,
+    )
     out = (proc.stdout or b"").decode("utf-8", errors="replace")
     return [line.strip() for line in out.splitlines() if line.strip()]
 
@@ -95,8 +115,9 @@ def read_external_converter(target: K8sTarget, name: str) -> str:
     return (proc.stdout or b"").decode("utf-8", errors="replace")
 
 
-def write_external_converter(target: K8sTarget, name: str, content: str,
-                              *, backup: bool = True) -> None:
+def write_external_converter(
+    target: K8sTarget, name: str, content: str, *, backup: bool = True
+) -> None:
     """Push a .js file into z2m's external_converters dir."""
     if "/" in name or name.startswith("."):
         raise ValueError("converter name must be a bare filename ending in .js")
@@ -113,14 +134,19 @@ def write_external_converter(target: K8sTarget, name: str, content: str,
     exec_(target, ["sh", "-c", " && ".join(setup)], stdin=content)
 
 
-def remove_external_converter(target: K8sTarget, name: str, *,
-                                backup: bool = True) -> None:
+def remove_external_converter(target: K8sTarget, name: str, *, backup: bool = True) -> None:
     if "/" in name or name.startswith("."):
         raise ValueError("converter name must be a bare filename")
     target_path = f"{target.data_path}/external_converters/{name}"
     if backup:
-        exec_(target, ["sh", "-c",
-                        f"[ -f {target_path} ] && mv {target_path} {target_path}.$(date +%s).removed.bak"],
-              check=False)
+        exec_(
+            target,
+            [
+                "sh",
+                "-c",
+                f"[ -f {target_path} ] && mv {target_path} {target_path}.$(date +%s).removed.bak",
+            ],
+            check=False,
+        )
     else:
         exec_(target, ["rm", "-f", target_path], check=False)

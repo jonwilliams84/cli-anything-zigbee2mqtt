@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -28,6 +27,7 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 
 # ──────────────────────────────────────────────────────── helpers
+
 
 def make_client(ctx: click.Context) -> BridgeClient:
     obj = ctx.obj
@@ -117,36 +117,57 @@ def _abort(message: str) -> None:
 
 # ──────────────────────────────────────────────────────── root
 
+
 @click.group(context_settings=CONTEXT_SETTINGS, invoke_without_command=True)
 @click.option("--mqtt-host", default=None, help="MQTT broker host (e.g. 10.32.100.5)")
 @click.option("--mqtt-port", default=None, type=int, help="MQTT broker port (default 1883)")
 @click.option("--mqtt-username", default=None)
 @click.option("--mqtt-password", default=None)
-@click.option("--base-topic", default=None,
-              help="z2m base topic (default 'zigbee2mqtt')")
+@click.option("--base-topic", default=None, help="z2m base topic (default 'zigbee2mqtt')")
 @click.option("--k8s-namespace", default=None)
 @click.option("--k8s-deployment", default=None)
 @click.option("--k8s-container", default=None)
 @click.option("--k8s-data-path", default=None)
-@click.option("--config", "config_path", default=None, type=click.Path(),
-              help="Connection profile path (default ~/.config/cli-anything-zigbee2mqtt.json)")
-@click.option("--json", "as_json", is_flag=True, default=False,
-              help="Emit machine-readable JSON output")
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(),
+    help="Connection profile path (default ~/.config/cli-anything-zigbee2mqtt.json)",
+)
+@click.option(
+    "--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON output"
+)
 @click.pass_context
-def cli(ctx, mqtt_host, mqtt_port, mqtt_username, mqtt_password, base_topic,
-        k8s_namespace, k8s_deployment, k8s_container, k8s_data_path,
-        config_path, as_json):
+def cli(
+    ctx,
+    mqtt_host,
+    mqtt_port,
+    mqtt_username,
+    mqtt_password,
+    base_topic,
+    k8s_namespace,
+    k8s_deployment,
+    k8s_container,
+    k8s_data_path,
+    config_path,
+    as_json,
+):
     """cli-anything-zigbee2mqtt — bridge + device control over MQTT."""
     ctx.ensure_object(dict)
     cfg_path_obj = Path(config_path).expanduser() if config_path else None
     cfg = project.load_config(cfg_path_obj)
     cfg = project.merge_cli_overrides(
         cfg,
-        mqtt_host=mqtt_host, mqtt_port=mqtt_port,
-        mqtt_username=mqtt_username, mqtt_password=mqtt_password,
+        mqtt_host=mqtt_host,
+        mqtt_port=mqtt_port,
+        mqtt_username=mqtt_username,
+        mqtt_password=mqtt_password,
         base_topic=base_topic,
-        k8s_namespace=k8s_namespace, k8s_deployment=k8s_deployment,
-        k8s_container=k8s_container, k8s_data_path=k8s_data_path,
+        k8s_namespace=k8s_namespace,
+        k8s_deployment=k8s_deployment,
+        k8s_container=k8s_container,
+        k8s_data_path=k8s_data_path,
     )
     ctx.obj.update(cfg)
     ctx.obj["as_json"] = as_json
@@ -156,6 +177,7 @@ def cli(ctx, mqtt_host, mqtt_port, mqtt_username, mqtt_password, base_topic,
 
 
 # ──────────────────────────────────────────────────────── profile
+
 
 @cli.group()
 def config():
@@ -181,6 +203,7 @@ def config_save(ctx):
 
 # ──────────────────────────────────────────────────────── bridge
 
+
 @cli.group()
 def bridge():
     """Bridge-level info, state, restart, options, log/event tails."""
@@ -203,8 +226,11 @@ def bridge_state_cmd(ctx):
 
 
 @bridge.command("restart")
-@click.option("--via-kubectl", is_flag=True,
-              help="Force a kubectl rollout restart instead of asking z2m politely")
+@click.option(
+    "--via-kubectl",
+    is_flag=True,
+    help="Force a kubectl rollout restart instead of asking z2m politely",
+)
 @click.pass_context
 def bridge_restart_cmd(ctx, via_kubectl):
     """Restart the z2m process. Hard variant via kubectl when MQTT is unhealthy."""
@@ -249,8 +275,7 @@ def bridge_options_set(ctx, options_json):
 
 
 @bridge.command("watch-events")
-@click.option("--duration", default=15.0, type=float,
-              help="Seconds to listen (default 15)")
+@click.option("--duration", default=15.0, type=float, help="Seconds to listen (default 15)")
 @click.pass_context
 def bridge_watch_events(ctx, duration):
     """Tail bridge events — device joined, removed, OTA progress, etc."""
@@ -270,14 +295,16 @@ def bridge_watch_logging(ctx, duration):
             emit(ctx, logs)
             return
         bridge_core.watch_logging(
-            c, duration=duration,
+            c,
+            duration=duration,
             callback=lambda d: click.echo(
-                f"[{d.get('level','?'):<5}] {d.get('message') or d.get('raw','')}"
+                f"[{d.get('level', '?'):<5}] {d.get('message') or d.get('raw', '')}"
             ),
         )
 
 
 # ──────────────────────────────────────────────────────── devices
+
 
 @cli.group()
 def device():
@@ -311,24 +338,29 @@ def device_show(ctx, ident):
 @device.command("rename")
 @click.argument("from_name")
 @click.argument("to_name")
-@click.option("--no-ha-rename", is_flag=True,
-              help="Don't also rename the HA entities (default: do).")
+@click.option(
+    "--no-ha-rename", is_flag=True, help="Don't also rename the HA entities (default: do)."
+)
 @click.pass_context
 def device_rename(ctx, from_name, to_name, no_ha_rename):
     with make_client(ctx) as c:
         try:
-            emit(ctx, devices_core.rename(c, from_=from_name, to=to_name,
-                                           homeassistant_rename=not no_ha_rename))
+            emit(
+                ctx,
+                devices_core.rename(
+                    c, from_=from_name, to=to_name, homeassistant_rename=not no_ha_rename
+                ),
+            )
         except MqttError as exc:
             _abort(str(exc))
 
 
 @device.command("remove")
 @click.argument("id_or_name")
-@click.option("--force", is_flag=True,
-              help="Skip network-level removal (device already physically gone).")
-@click.option("--block", is_flag=True,
-              help="Add the device to the block-list so it can't rejoin.")
+@click.option(
+    "--force", is_flag=True, help="Skip network-level removal (device already physically gone)."
+)
+@click.option("--block", is_flag=True, help="Add the device to the block-list so it can't rejoin.")
 @click.confirmation_option(prompt="Really remove this device from the network?")
 @click.pass_context
 def device_remove(ctx, id_or_name, force, block):
@@ -416,8 +448,12 @@ def device_watch(ctx, friendly_name, duration):
 
 @device.command("state")
 @click.argument("friendly_name")
-@click.option("--timeout", default=3.0, type=float,
-              help="Seconds to wait for the retained payload (default 3)")
+@click.option(
+    "--timeout",
+    default=3.0,
+    type=float,
+    help="Seconds to wait for the retained payload (default 3)",
+)
 @click.pass_context
 def device_state(ctx, friendly_name, timeout):
     """Read the device's last retained state payload (one-shot)."""
@@ -426,32 +462,52 @@ def device_state(ctx, friendly_name, timeout):
 
 
 @device.command("stale")
-@click.option("--threshold", "threshold_minutes", default=60, type=int,
-              show_default=True,
-              help="Minimum minutes since last_seen to include")
-@click.option("--no-routers", is_flag=True, default=False,
-              help="Skip mains-powered routers (focus on battery devices)")
-@click.option("--no-end-devices", is_flag=True, default=False,
-              help="Skip end devices (e.g. only check infrastructure)")
+@click.option(
+    "--threshold",
+    "threshold_minutes",
+    default=60,
+    type=int,
+    show_default=True,
+    help="Minimum minutes since last_seen to include",
+)
+@click.option(
+    "--no-routers",
+    is_flag=True,
+    default=False,
+    help="Skip mains-powered routers (focus on battery devices)",
+)
+@click.option(
+    "--no-end-devices",
+    is_flag=True,
+    default=False,
+    help="Skip end devices (e.g. only check infrastructure)",
+)
 @click.pass_context
 def device_stale(ctx, threshold_minutes, no_routers, no_end_devices):
     """Rank devices by how long they've been silent (last_seen)."""
     with make_client(ctx) as c:
-        emit(ctx, devices_core.find_stale(
-            c,
-            threshold_minutes=threshold_minutes,
-            include_routers=not no_routers,
-            include_end_devices=not no_end_devices,
-        ))
+        emit(
+            ctx,
+            devices_core.find_stale(
+                c,
+                threshold_minutes=threshold_minutes,
+                include_routers=not no_routers,
+                include_end_devices=not no_end_devices,
+            ),
+        )
 
 
 @device.command("generate-converter")
 @click.argument("ident")
-@click.option("--output", "-o", "output_path", default=None,
-              type=click.Path(dir_okay=False, writable=True),
-              help="Write the generated .js to this path (else print to stdout)")
-@click.option("--overwrite", is_flag=True, default=False,
-              help="Replace --output if it exists")
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True),
+    help="Write the generated .js to this path (else print to stdout)",
+)
+@click.option("--overwrite", is_flag=True, default=False, help="Replace --output if it exists")
 @click.pass_context
 def device_generate_converter(ctx, ident, output_path, overwrite):
     """Ask z2m to emit a starter external-converter .js for IDENT.
@@ -460,6 +516,7 @@ def device_generate_converter(ctx, ident, output_path, overwrite):
     to drop the generated file into z2m's external_converters/.
     """
     import os
+
     with make_client(ctx) as c:
         resp = devices_core.generate_external_definition(c, ident)
     source = resp.get("source") if isinstance(resp, dict) else None
@@ -471,49 +528,83 @@ def device_generate_converter(ctx, ident, output_path, overwrite):
             _abort(f"{output_path} already exists (--overwrite to replace)")
         with open(output_path, "w", encoding="utf-8") as fh:
             fh.write(source)
-        emit(ctx, {
-            "saved": output_path,
-            "bytes": len(source.encode("utf-8")),
-            "model": resp.get("model"),
-        })
+        emit(
+            ctx,
+            {
+                "saved": output_path,
+                "bytes": len(source.encode("utf-8")),
+                "model": resp.get("model"),
+            },
+        )
     else:
         click.echo(source)
 
 
 @device.command("configure-reporting")
 @click.argument("ident")
-@click.option("--cluster", required=True,
-              help="zigbee-herdsman cluster name, e.g. genOnOff, msTemperatureMeasurement")
-@click.option("--attribute", required=True,
-              help="Attribute id within the cluster (e.g. measuredValue, batteryPercentageRemaining)")
-@click.option("--min", "min_interval", type=int, required=True,
-              help="Minimum seconds between reports")
-@click.option("--max", "max_interval", type=int, required=True,
-              help="Maximum seconds between reports (0 to disable)")
-@click.option("--change", "reportable_change", type=float, default=None,
-              help="Reportable change in native units (omit for boolean attrs)")
-@click.option("--endpoint", type=int, default=None,
-              help="Endpoint id (default lets z2m pick based on cluster)")
+@click.option(
+    "--cluster",
+    required=True,
+    help="zigbee-herdsman cluster name, e.g. genOnOff, msTemperatureMeasurement",
+)
+@click.option(
+    "--attribute",
+    required=True,
+    help="Attribute id within the cluster (e.g. measuredValue, batteryPercentageRemaining)",
+)
+@click.option(
+    "--min", "min_interval", type=int, required=True, help="Minimum seconds between reports"
+)
+@click.option(
+    "--max",
+    "max_interval",
+    type=int,
+    required=True,
+    help="Maximum seconds between reports (0 to disable)",
+)
+@click.option(
+    "--change",
+    "reportable_change",
+    type=float,
+    default=None,
+    help="Reportable change in native units (omit for boolean attrs)",
+)
+@click.option(
+    "--endpoint",
+    type=int,
+    default=None,
+    help="Endpoint id (default lets z2m pick based on cluster)",
+)
 @click.pass_context
-def device_configure_reporting(ctx, ident, cluster, attribute, min_interval,
-                                  max_interval, reportable_change, endpoint):
+def device_configure_reporting(
+    ctx, ident, cluster, attribute, min_interval, max_interval, reportable_change, endpoint
+):
     """Manually configure attribute reporting on a device endpoint."""
     with make_client(ctx) as c:
-        emit(ctx, devices_core.configure_reporting(
-            c,
-            id_=ident, cluster=cluster, attribute=attribute,
-            minimum_report_interval=min_interval,
-            maximum_report_interval=max_interval,
-            reportable_change=reportable_change,
-            endpoint=endpoint,
-        ))
+        emit(
+            ctx,
+            devices_core.configure_reporting(
+                c,
+                id_=ident,
+                cluster=cluster,
+                attribute=attribute,
+                minimum_report_interval=min_interval,
+                maximum_report_interval=max_interval,
+                reportable_change=reportable_change,
+                endpoint=endpoint,
+            ),
+        )
 
 
 @device.command("bind")
 @click.argument("from_")
 @click.argument("to")
-@click.option("--cluster", "clusters", multiple=True,
-              help="Cluster to bind (repeatable). Omit to let z2m bind every common cluster")
+@click.option(
+    "--cluster",
+    "clusters",
+    multiple=True,
+    help="Cluster to bind (repeatable). Omit to let z2m bind every common cluster",
+)
 @click.pass_context
 def device_bind(ctx, from_, to, clusters):
     """Bind FROM endpoint to TO endpoint (or to a group).
@@ -522,25 +613,39 @@ def device_bind(ctx, from_, to, clusters):
     suffix for endpoint id. TO may be a group friendly_name.
     """
     with make_client(ctx) as c:
-        emit(ctx, bindings_core.bind(
-            c, from_=from_, to=to,
-            clusters=list(clusters) if clusters else None,
-        ))
+        emit(
+            ctx,
+            bindings_core.bind(
+                c,
+                from_=from_,
+                to=to,
+                clusters=list(clusters) if clusters else None,
+            ),
+        )
 
 
 @device.command("unbind")
 @click.argument("from_")
 @click.argument("to")
-@click.option("--cluster", "clusters", multiple=True,
-              help="Cluster to unbind (repeatable). Omit to remove every common cluster")
+@click.option(
+    "--cluster",
+    "clusters",
+    multiple=True,
+    help="Cluster to unbind (repeatable). Omit to remove every common cluster",
+)
 @click.pass_context
 def device_unbind(ctx, from_, to, clusters):
     """Remove the binding FROM ⇒ TO."""
     with make_client(ctx) as c:
-        emit(ctx, bindings_core.unbind(
-            c, from_=from_, to=to,
-            clusters=list(clusters) if clusters else None,
-        ))
+        emit(
+            ctx,
+            bindings_core.unbind(
+                c,
+                from_=from_,
+                to=to,
+                clusters=list(clusters) if clusters else None,
+            ),
+        )
 
 
 @device.command("bindings")
@@ -559,6 +664,7 @@ def device_bindings(ctx, ident):
 
 # ──────────────────────────────────────────────────────── groups
 
+
 @cli.group()
 def group():
     """Zigbee groups — list / add / remove / membership."""
@@ -573,8 +679,9 @@ def group_list(ctx):
 
 @group.command("add")
 @click.argument("friendly_name")
-@click.option("--id", "id_", type=int, default=None,
-              help="Specific group id (default: auto-assign)")
+@click.option(
+    "--id", "id_", type=int, default=None, help="Specific group id (default: auto-assign)"
+)
 @click.pass_context
 def group_add(ctx, friendly_name, id_):
     with make_client(ctx) as c:
@@ -616,10 +723,15 @@ def group_add_member(ctx, group_name, device_name):
 @click.pass_context
 def group_remove_member(ctx, group_name, device_name, skip_disable_reporting):
     with make_client(ctx) as c:
-        emit(ctx, groups_core.remove_member(
-            c, group_name, device_name,
-            skip_disable_reporting=skip_disable_reporting,
-        ))
+        emit(
+            ctx,
+            groups_core.remove_member(
+                c,
+                group_name,
+                device_name,
+                skip_disable_reporting=skip_disable_reporting,
+            ),
+        )
 
 
 @group.command("remove-all")
@@ -652,6 +764,7 @@ def group_options(ctx, group_name, options_json):
 
 # ──────────────────────────────────────────────────────── ota
 
+
 @cli.group()
 def ota():
     """OTA firmware update."""
@@ -667,9 +780,12 @@ def ota_check(ctx, id_or_name):
 
 @ota.command("update")
 @click.argument("id_or_name")
-@click.option("--timeout", default=600.0, type=float,
-              help="How long to wait for completion (default 600s).")
-@click.confirmation_option(prompt="Trigger OTA update? Device may be unavailable for several minutes.")
+@click.option(
+    "--timeout", default=600.0, type=float, help="How long to wait for completion (default 600s)."
+)
+@click.confirmation_option(
+    prompt="Trigger OTA update? Device may be unavailable for several minutes."
+)
 @click.pass_context
 def ota_update(ctx, id_or_name, timeout):
     with make_client(ctx) as c:
@@ -686,6 +802,7 @@ def ota_schedule(ctx, id_or_name):
 
 # ──────────────────────────────────────────────────────── network admin
 
+
 @cli.group("network")
 def network_grp():
     """Permit-join, network map, touchlink, coordinator check, backup."""
@@ -693,21 +810,26 @@ def network_grp():
 
 @network_grp.command("permit-join")
 @click.argument("state", type=click.Choice(["on", "off"]))
-@click.option("--time", "time_secs", default=254, type=int,
-              help="Seconds permit_join stays open (max 254).")
-@click.option("--device", default=None,
-              help="Open via a specific router (friendly name).")
+@click.option(
+    "--time", "time_secs", default=254, type=int, help="Seconds permit_join stays open (max 254)."
+)
+@click.option("--device", default=None, help="Open via a specific router (friendly name).")
 @click.pass_context
 def network_permit_join(ctx, state, time_secs, device):
     with make_client(ctx) as c:
-        emit(ctx, admin.permit_join(
-            c, value=(state == "on"), time_secs=time_secs, device=device,
-        ))
+        emit(
+            ctx,
+            admin.permit_join(
+                c,
+                value=(state == "on"),
+                time_secs=time_secs,
+                device=device,
+            ),
+        )
 
 
 @network_grp.command("map")
-@click.option("--type", "type_", default="raw",
-              type=click.Choice(["raw", "graphviz", "plantuml"]))
+@click.option("--type", "type_", default="raw", type=click.Choice(["raw", "graphviz", "plantuml"]))
 @click.option("--no-routes", is_flag=True, help="Skip route enumeration (faster).")
 @click.pass_context
 def network_map_cmd(ctx, type_, no_routes):
@@ -758,6 +880,7 @@ def network_backup(ctx):
 
 # ──────────────────────────────────────────────────────── converters
 
+
 @cli.group()
 def converter():
     """Manage z2m's external_converters/ (.js files via kubectl exec)."""
@@ -786,9 +909,15 @@ def converter_show(ctx, name):
 def converter_add(ctx, name, local_path, no_backup):
     """Upload a local .js file as a z2m external converter."""
     target = make_k8s_target(ctx)
-    emit(ctx, converters_core.add_from_file(
-        target, name=name, local_path=local_path, backup=not no_backup,
-    ))
+    emit(
+        ctx,
+        converters_core.add_from_file(
+            target,
+            name=name,
+            local_path=local_path,
+            backup=not no_backup,
+        ),
+    )
 
 
 @converter.command("remove")
@@ -802,6 +931,7 @@ def converter_remove(ctx, name, no_backup):
 
 
 # ──────────────────────────────────────────────────────── install codes
+
 
 @cli.group("install-code")
 def install_code_grp():
@@ -828,6 +958,7 @@ def install_code_remove(ctx, value):
 
 
 # ──────────────────────────────────────────────────────── extensions
+
 
 @cli.group()
 def extension():
@@ -864,9 +995,14 @@ def extension_show(ctx, name):
 def extension_save(ctx, name, local_path):
     """Upload a local .js file as an extension."""
     with make_client(ctx) as c:
-        emit(ctx, extensions_core.save_from_file(
-            c, name=name, local_path=local_path,
-        ))
+        emit(
+            ctx,
+            extensions_core.save_from_file(
+                c,
+                name=name,
+                local_path=local_path,
+            ),
+        )
 
 
 @extension.command("remove")
@@ -880,6 +1016,7 @@ def extension_remove(ctx, name):
 
 
 # ──────────────────────────────────────────────────────── REPL
+
 
 @cli.command()
 @click.pass_context
@@ -909,6 +1046,7 @@ def repl(ctx):
             skin.help(cli.commands)
             continue
         import shlex
+
         argv = shlex.split(line)
         try:
             cli.main(args=argv, standalone_mode=False, prog_name="(z2m)")

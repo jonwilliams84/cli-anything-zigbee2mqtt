@@ -14,13 +14,13 @@ import ast
 import inspect
 import logging
 
-import pytest
 
 from cli_anything.zigbee2mqtt.core import bridge as bridge_core
 from cli_anything.zigbee2mqtt.core import k8s_backend as k8s_core
 
 
 # ── B110: callback exceptions are logged, not silently swallowed ────────────
+
 
 class TestBridgeCallbackErrorsAreLogged:
     """B110 regression: callback exceptions must be logged, not swallowed."""
@@ -36,12 +36,11 @@ class TestBridgeCallbackErrorsAreLogged:
                 if handler.type is None:
                     body = handler.body
                     if len(body) == 1 and isinstance(body[0], ast.Pass):
-                        raise AssertionError(
-                            f"bare except:pass at line {handler.lineno}"
-                        )
+                        raise AssertionError(f"bare except:pass at line {handler.lineno}")
 
     def test_callback_exception_is_logged(self, caplog):
         """When a user callback raises, the exception is logged at WARNING."""
+
         class FakeClient:
             base_topic = "zigbee2mqtt"
             subscriptions: list[tuple[str, callable]] = []
@@ -55,9 +54,7 @@ class TestBridgeCallbackErrorsAreLogged:
             raise RuntimeError("boom")
 
         with caplog.at_level(logging.WARNING, logger="cli_anything.zigbee2mqtt.core.bridge"):
-            result = bridge_core.watch_events(
-                client, duration=0.01, callback=bad_callback
-            )
+            result = bridge_core.watch_events(client, duration=0.01, callback=bad_callback)
             assert result == [], "no data should be collected without publish"
 
             # Simulate an MQTT message arriving.
@@ -77,6 +74,7 @@ class TestBridgeCallbackErrorsAreLogged:
 
     def test_logging_callback_exception_is_logged(self, caplog):
         """Same regression for watch_logging."""
+
         class FakeClient:
             base_topic = "zigbee2mqtt"
             subscriptions: list[tuple[str, callable]] = []
@@ -90,9 +88,7 @@ class TestBridgeCallbackErrorsAreLogged:
             raise ValueError("kaboom")
 
         with caplog.at_level(logging.WARNING, logger="cli_anything.zigbee2mqtt.core.bridge"):
-            result = bridge_core.watch_logging(
-                client, duration=0.01, callback=bad_callback
-            )
+            result = bridge_core.watch_logging(client, duration=0.01, callback=bad_callback)
             topic, cb = client.subscriptions[-1]
             assert "bridge/logging" in topic
             cb(topic, b'{"level":"info","message":"hello"}')
@@ -105,6 +101,7 @@ class TestBridgeCallbackErrorsAreLogged:
 
     def test_good_callback_still_works(self):
         """A non-raising callback still receives data normally."""
+
         class FakeClient:
             base_topic = "zigbee2mqtt"
             subscriptions: list[tuple[str, callable]] = []
@@ -118,9 +115,7 @@ class TestBridgeCallbackErrorsAreLogged:
         def good_callback(data):
             seen.append(data)
 
-        result = bridge_core.watch_events(
-            client, duration=0.01, callback=good_callback
-        )
+        result = bridge_core.watch_events(client, duration=0.01, callback=good_callback)
         topic, cb = client.subscriptions[-1]
         cb(topic, b'{"type":"device_joined"}')
 
@@ -131,6 +126,7 @@ class TestBridgeCallbackErrorsAreLogged:
 
 
 # ── B404: subprocess is lazily imported, not at module level ────────────────
+
 
 class TestK8sSubprocessLazyImport:
     """B404 regression: subprocess must not be imported at module level."""
@@ -171,11 +167,13 @@ class TestK8sSubprocessLazyImport:
         src = inspect.getsource(k8s_core)
         tree = ast.parse(src)
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "subprocess"
-                    and node.func.attr == "run"):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "subprocess"
+                and node.func.attr == "run"
+            ):
                 line = src.splitlines()[node.lineno - 1]
                 assert "B603" in line or "nosec" in line.lower(), (
                     f"subprocess.run at line {node.lineno} lacks nosec: {line!r}"
@@ -183,6 +181,7 @@ class TestK8sSubprocessLazyImport:
 
 
 # ── B101: assert used in test assertions ─────────────────────────────────────
+
 
 class TestB101AssertsReplacedWithIfRaise:
     """Regression: bare ``assert`` in test_core.py must be replaced with
@@ -197,7 +196,8 @@ class TestB101AssertsReplacedWithIfRaise:
 
     def test_no_assert_in_test_core(self):
         """test_core.py must contain no bare ``assert`` statements."""
-        import ast, inspect
+        import ast
+        import inspect
         from cli_anything.zigbee2mqtt.tests import test_core as tc
 
         src = inspect.getsource(tc)
@@ -211,19 +211,13 @@ class TestB101AssertsReplacedWithIfRaise:
         # Lines 235, 288, 289 were the three originally reported.
         # Additional asserts may exist (not a regression failure per se,
         # but the original three must be gone).
-        assert 235 not in bare_asserts, (
-            "assert at line 235 still present — B101 not fixed"
-        )
-        assert 288 not in bare_asserts, (
-            "assert at line 288 still present — B101 not fixed"
-        )
-        assert 289 not in bare_asserts, (
-            "assert at line 289 still present — B101 not fixed"
-        )
+        assert 235 not in bare_asserts, "assert at line 235 still present — B101 not fixed"
+        assert 288 not in bare_asserts, "assert at line 288 still present — B101 not fixed"
+        assert 289 not in bare_asserts, "assert at line 289 still present — B101 not fixed"
 
     def test_if_raise_pattern_at_line_235(self):
         """Line 235 area must use ``if/raise`` instead of bare assert."""
-        import ast, inspect
+        import inspect
         from cli_anything.zigbee2mqtt.tests import test_core as tc
 
         src = inspect.getsource(tc)
@@ -243,13 +237,12 @@ class TestB101AssertsReplacedWithIfRaise:
                     break
 
         assert found, (
-            "if/raise pattern for echo check not found near line 235 — "
-            "B101 regression test failed"
+            "if/raise pattern for echo check not found near line 235 — B101 regression test failed"
         )
 
     def test_if_raise_pattern_at_line_288_289(self):
         """Lines 288-289 area must use ``if/raise`` instead of bare assert."""
-        import ast, inspect
+        import inspect
         from cli_anything.zigbee2mqtt.tests import test_core as tc
 
         src = inspect.getsource(tc)
@@ -258,8 +251,10 @@ class TestB101AssertsReplacedWithIfRaise:
         # Find the block with last_topic check
         topic_found = payload_found = False
         for i, line in enumerate(lines):
-            if 'last_topic != "z2m/Lounge Lamp/set"' in line or \
-               "last_topic != 'z2m/Lounge Lamp/set'" in line:
+            if (
+                'last_topic != "z2m/Lounge Lamp/set"' in line
+                or "last_topic != 'z2m/Lounge Lamp/set'" in line
+            ):
                 for j in range(i, min(i + 3, len(lines))):
                     if "raise AssertionError" in lines[j]:
                         topic_found = True

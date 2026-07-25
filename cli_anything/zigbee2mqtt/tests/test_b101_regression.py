@@ -23,6 +23,7 @@ import sys
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _run_optimized(code: str):
     """Run *code* in a subprocess with the -O flag (asserts stripped).
 
@@ -33,6 +34,7 @@ def _run_optimized(code: str):
     — never user input — so there is no command-injection surface (CWE-78).
     """
     import subprocess  # nosec B404 — lazy import avoids module-level B404;
+
     # not exploitable: only used to run sys.executable with a hardcoded
     # -c literal in tests, no user-controlled argv.
     return subprocess.run(  # nosec B603 — argv is a fixed list; code is a
@@ -77,6 +79,7 @@ SAMPLE = [
 
 # ── Regression tests for B101 fixes at test_core.py lines 95-96 ─────────────
 
+
 class TestB101FixInTestCore:
     """Verify the if/raise fix in test_core.py lines 95-96 works correctly.
 
@@ -93,13 +96,9 @@ class TestB101FixInTestCore:
         last = rows[-1]
         # Replicate the exact fix from test_core.py lines 95-96
         if last["model"] is not None:
-            raise AssertionError(
-                f"expected model None, got {last['model']!r}"
-            )
+            raise AssertionError(f"expected model None, got {last['model']!r}")
         if last["vendor"] is not None:
-            raise AssertionError(
-                f"expected vendor None, got {last['vendor']!r}"
-            )
+            raise AssertionError(f"expected vendor None, got {last['vendor']!r}")
 
     def test_fix_raises_on_wrong_model(self):
         """The if/raise pattern raises when model is not None.
@@ -141,16 +140,12 @@ class TestB101FixInTestCore:
         raised = False
         try:
             if last["model"] is not None:
-                raise AssertionError(
-                    f"expected model None, got {last['model']!r}"
-                )
+                raise AssertionError(f"expected model None, got {last['model']!r}")
         except AssertionError as exc:
             if "expected model None" in str(exc):
                 raised = True
         if not raised:
-            raise AssertionError(
-                "if/raise should have raised on non-None model"
-            )
+            raise AssertionError("if/raise should have raised on non-None model")
 
     def test_fix_raises_on_wrong_vendor(self):
         """The if/raise pattern raises when vendor is not None."""
@@ -188,16 +183,12 @@ class TestB101FixInTestCore:
         raised = False
         try:
             if last["vendor"] is not None:
-                raise AssertionError(
-                    f"expected vendor None, got {last['vendor']!r}"
-                )
+                raise AssertionError(f"expected vendor None, got {last['vendor']!r}")
         except AssertionError as exc:
             if "expected vendor None" in str(exc):
                 raised = True
         if not raised:
-            raise AssertionError(
-                "if/raise should have raised on non-None vendor"
-            )
+            raise AssertionError("if/raise should have raised on non-None vendor")
 
     def test_fix_survives_optimized_compilation(self):
         """The if/raise pattern is NOT stripped by -O (unlike assert).
@@ -235,14 +226,10 @@ class TestB101FixInTestCore:
             TestDevicesSummarize,
         )
 
-        src = inspect.getsource(
-            TestDevicesSummarize.test_summarize_handles_missing_definition
-        )
+        src = inspect.getsource(TestDevicesSummarize.test_summarize_handles_missing_definition)
         tree = ast.parse(textwrap.dedent(src))
         # Collect all assert nodes
-        assert_nodes = [
-            node for node in ast.walk(tree) if isinstance(node, ast.Assert)
-        ]
+        assert_nodes = [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
         # Check that the model and vendor asserts (lines 95-96) are gone.
         # We verify by checking the test string of each remaining assert.
         for node in assert_nodes:
@@ -257,6 +244,7 @@ class TestB101FixInTestCore:
 
 
 # ── Regression test for B404 fix (no module-level subprocess import) ───────
+
 
 class TestB404FixNoModuleLevelSubprocess:
     """Verify that ``import subprocess`` is no longer at module level.
@@ -278,8 +266,7 @@ class TestB404FixNoModuleLevelSubprocess:
                 for alias in node.names:
                     if alias.name == "subprocess":
                         raise AssertionError(
-                            "Module-level 'import subprocess' found — "
-                            "B404 finding not fixed"
+                            "Module-level 'import subprocess' found — B404 finding not fixed"
                         )
             if isinstance(node, ast.ImportFrom):
                 for alias in node.names:
@@ -296,10 +283,7 @@ class TestB404FixNoModuleLevelSubprocess:
         result = _run_optimized(code)
         if result.returncode != 0:
             raise AssertionError(
-                f"_run_optimized failed: rc={result.returncode}, "
-                f"stderr={result.stderr!r}"
+                f"_run_optimized failed: rc={result.returncode}, stderr={result.stderr!r}"
             )
         if "hello from -O" not in result.stdout:
-            raise AssertionError(
-                f"Expected output not found: {result.stdout!r}"
-            )
+            raise AssertionError(f"Expected output not found: {result.stdout!r}")
