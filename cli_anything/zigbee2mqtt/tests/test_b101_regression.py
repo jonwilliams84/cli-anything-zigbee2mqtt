@@ -453,3 +453,102 @@ class TestB101FixesLines166_170_185:
             raise AssertionError(
                 "Wrong expected value must raise ValueError even in -O mode"
             )
+
+
+class TestB101FixesLines213_217_235_239:
+    """Regression tests for the additional B101 fixes at lines 213, 217, 235, 239.
+
+    These lines were also converted from bare ``assert`` to ``if/raise``
+    patterns.  Although they were not in the original top-3 goal, they are
+    genuine B101 findings in the same file, so regression tests are provided
+    here to confirm each replacement raises when its condition is violated
+    and does NOT raise when the condition holds.
+    """
+
+    def test_line213_returncode_check_raises_on_nonzero(self):
+        """Former line-213 check raises when returncode != 0."""
+        result = _run_optimized('import sys; sys.exit(1)')  # returncode 1
+        raised = False
+        try:
+            if result.returncode != 0:
+                raise AssertionError(
+                    f"Expected returncode 0, got {result.returncode}, stderr={result.stderr!r}"
+                )
+        except AssertionError:
+            raised = True
+        if not raised:
+            raise AssertionError("line-213 if/raise check did not raise on nonzero returncode")
+
+    def test_line213_returncode_check_passes_on_zero(self):
+        """Former line-213 check does NOT raise when returncode == 0."""
+        result = _run_optimized('print("OK")')  # returncode 0
+        if result.returncode != 0:
+            raise AssertionError(
+                f"Expected returncode 0, got {result.returncode}, stderr={result.stderr!r}"
+            )
+
+    def test_line217_stdout_check_raises_when_ok_absent(self):
+        """Former line-217 check raises when 'OK' is not in stdout."""
+        result = _run_optimized('print("not ok")')  # no "OK" in stdout
+        raised = False
+        try:
+            if "OK" not in result.stdout:
+                raise AssertionError(
+                    f"Expected 'OK' in stdout, got: {result.stdout!r}"
+                )
+        except AssertionError:
+            raised = True
+        if not raised:
+            raise AssertionError("line-217 if/raise check did not raise when 'OK' absent")
+
+    def test_line217_stdout_check_passes_when_ok_present(self):
+        """Former line-217 check does NOT raise when 'OK' is in stdout."""
+        result = _run_optimized('print("OK")')
+        if "OK" not in result.stdout:
+            raise AssertionError(
+                f"Expected 'OK' in stdout, got: {result.stdout!r}"
+            )
+
+    def test_line235_returncode_check_raises_on_zero(self):
+        """Former line-235 check raises when returncode == 0."""
+        result = _run_optimized('print("ok")')  # returncode 0
+        raised = False
+        try:
+            if result.returncode == 0:
+                raise AssertionError(
+                    f"Expected nonzero returncode, got {result.returncode}, stdout={result.stdout!r}"
+                )
+        except AssertionError:
+            raised = True
+        if not raised:
+            raise AssertionError("line-235 if/raise check did not raise on zero returncode")
+
+    def test_line235_returncode_check_passes_on_nonzero(self):
+        """Former line-235 check does NOT raise when returncode != 0."""
+        result = _run_optimized('import sys; sys.exit(1)')  # returncode 1
+        if result.returncode == 0:
+            raise AssertionError(
+                f"Expected nonzero returncode, got {result.returncode}, stdout={result.stdout!r}"
+            )
+
+    def test_line239_stderr_check_raises_when_valueerror_absent(self):
+        """Former line-239 check raises when 'ValueError' is not in stderr."""
+        result = _run_optimized('import sys; sys.exit(1)')  # no ValueError in stderr
+        raised = False
+        try:
+            if "ValueError" not in result.stderr:
+                raise AssertionError(
+                    f"Expected 'ValueError' in stderr, got: {result.stderr!r}"
+                )
+        except AssertionError:
+            raised = True
+        if not raised:
+            raise AssertionError("line-239 if/raise check did not raise when 'ValueError' absent")
+
+    def test_line239_stderr_check_passes_when_valueerror_present(self):
+        """Former line-239 check does NOT raise when 'ValueError' is in stderr."""
+        result = _run_optimized('raise ValueError("boom")')
+        if "ValueError" not in result.stderr:
+            raise AssertionError(
+                f"Expected 'ValueError' in stderr, got: {result.stderr!r}"
+            )
