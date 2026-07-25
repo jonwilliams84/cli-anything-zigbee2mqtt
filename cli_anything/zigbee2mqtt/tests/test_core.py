@@ -86,9 +86,12 @@ class TestDevicesSummarize:
     def test_summarize_handles_missing_definition(self):
         rows = devices_core.summarize(self.SAMPLE)
         last = rows[-1]
-        assert last["model"] is None
-        assert last["vendor"] is None
-        assert last["interview_completed"] is False
+        if last["model"] is not None:
+            raise ValueError(f"expected model None, got {last['model']!r}")  # B101 fix: assert stripped in -O
+        if last["vendor"] is not None:
+            raise ValueError(f"expected vendor None, got {last['vendor']!r}")  # B101 fix: assert stripped in -O
+        if last["interview_completed"] is not False:
+            raise ValueError(f"expected interview_completed False, got {last['interview_completed']!r}")  # B101 fix: assert stripped in -O
 
 
 # ── BridgeClient (fake transport) ───────────────────────────────────────────

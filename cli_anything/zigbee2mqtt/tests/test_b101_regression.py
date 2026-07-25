@@ -645,3 +645,88 @@ print("passed")
             raise AssertionError(
                 f"line-81 if/raise check raised unexpectedly: {result.stderr}"
             )
+
+
+class TestSummarizeMissingDefinitionFix:
+    """Regression tests for lines 89-91 fix (test_summarize_handles_missing_definition)."""
+
+    def test_line89_model_none_raises_on_wrong_value(self):
+        """Former line-89 check raises when model is not None."""
+        code = """
+last = {"model": "HAS_VALUE", "vendor": None, "interview_completed": False}
+if last["model"] is not None:
+    raise ValueError(f"expected model None, got {last['model']!r}")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "line-89 if/raise check was stripped (returncode 0 in -O mode)"
+            )
+
+    def test_line89_model_none_passes_on_correct_value(self):
+        """Former line-89 check does NOT raise when model is None."""
+        code = """
+last = {"model": None, "vendor": None, "interview_completed": False}
+if last["model"] is not None:
+    raise ValueError(f"expected model None, got {last['model']!r}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"line-89 if/raise check raised unexpectedly: {result.stderr}"
+            )
+
+    def test_line90_vendor_none_raises_on_wrong_value(self):
+        """Former line-90 check raises when vendor is not None."""
+        code = """
+last = {"model": None, "vendor": "HAS_VALUE", "interview_completed": False}
+if last["vendor"] is not None:
+    raise ValueError(f"expected vendor None, got {last['vendor']!r}")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "line-90 if/raise check was stripped (returncode 0 in -O mode)"
+            )
+
+    def test_line90_vendor_none_passes_on_correct_value(self):
+        """Former line-90 check does NOT raise when vendor is None."""
+        code = """
+last = {"model": None, "vendor": None, "interview_completed": False}
+if last["vendor"] is not None:
+    raise ValueError(f"expected vendor None, got {last['vendor']!r}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"line-90 if/raise check raised unexpectedly: {result.stderr}"
+            )
+
+    def test_line91_interview_false_raises_on_wrong_value(self):
+        """Former line-91 check raises when interview_completed is not False."""
+        code = """
+last = {"model": None, "vendor": None, "interview_completed": True}
+if last["interview_completed"] is not False:
+    raise ValueError(f"expected interview_completed False, got {last['interview_completed']!r}")
+"""
+        result = _run_optimized(code)
+        if result.returncode == 0:
+            raise AssertionError(
+                "line-91 if/raise check was stripped (returncode 0 in -O mode)"
+            )
+
+    def test_line91_interview_false_passes_on_correct_value(self):
+        """Former line-91 check does NOT raise when interview_completed is False."""
+        code = """
+last = {"model": None, "vendor": None, "interview_completed": False}
+if last["interview_completed"] is not False:
+    raise ValueError(f"expected interview_completed False, got {last['interview_completed']!r}")
+print("passed")
+"""
+        result = _run_optimized(code)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"line-91 if/raise check raised unexpectedly: {result.stderr}"
+            )
