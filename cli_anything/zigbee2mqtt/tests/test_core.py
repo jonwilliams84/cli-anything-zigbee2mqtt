@@ -76,6 +76,8 @@ class TestDevicesSummarize:
 
     def test_summarize_returns_one_row_per_device(self):
         rows = devices_core.summarize(self.SAMPLE)
+        # B101 fix: assert is stripped when compiling to optimised byte code (-O);
+        # use if/raise so the check survives optimised compilation.
         if len(rows) != 3:
             raise AssertionError(f"expected 3 rows, got {len(rows)}")
         if rows[0]["model"] != "ZY-M100-24GV3":
@@ -90,14 +92,9 @@ class TestDevicesSummarize:
     def test_summarize_handles_missing_definition(self):
         rows = devices_core.summarize(self.SAMPLE)
         last = rows[-1]
-        if last["model"] is not None:
-            raise AssertionError(f"expected model None, got {last['model']!r}")
-        if last["vendor"] is not None:
-            raise AssertionError(f"expected vendor None, got {last['vendor']!r}")
-        if last["interview_completed"] is not False:
-            raise AssertionError(
-                f"expected interview_completed False, got {last['interview_completed']!r}"
-            )
+        assert last["model"] is None
+        assert last["vendor"] is None
+        assert last["interview_completed"] is False
 
 
 # ── BridgeClient (fake transport) ───────────────────────────────────────────
@@ -203,10 +200,7 @@ class TestBridgeClient:
         c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
         c.connect()
         subs = c.client.subscriptions  # type: ignore[attr-defined]
-        if not any("/bridge/response/#" in s for s in subs):
-            raise AssertionError(
-                f"expected subscription on /bridge/response/#, got {subs!r}"
-            )
+        assert any("/bridge/response/#" in s for s in subs)
 
     def test_request_correlates_response_by_transaction(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
@@ -214,14 +208,8 @@ class TestBridgeClient:
         with c as client:
             resp = client.request("device/rename",
                                    payload={"from": "A", "to": "B"})
-            if resp["status"] != "ok":
-                raise AssertionError(
-                    f"expected status 'ok', got {resp['status']!r}"
-                )
-            if resp["data"]["echo"] != "device/rename":
-                raise AssertionError(
-                    f"expected echo 'device/rename', got {resp['data']['echo']!r}"
-                )
+            assert resp["status"] == "ok"
+            assert resp["data"]["echo"] == "device/rename"
 
     def test_request_raises_on_error_status(self, fake_paho, monkeypatch):
         """If z2m returns status=error, BridgeClient.request should raise."""
@@ -274,15 +262,8 @@ class TestBridgeClient:
         published = client.client.published  # type: ignore[attr-defined]
         # last publish should be the device set
         last_topic, last_payload, _, _ = published[-1]
-        if last_topic != "z2m/Lounge Lamp/set":
-            raise AssertionError(
-                f"expected topic 'z2m/Lounge Lamp/set', got {last_topic!r}"
-            )
-        parsed_payload = json.loads(last_payload)
-        if parsed_payload != {"state": "ON"}:
-            raise AssertionError(
-                f"expected payload {'state': 'ON'}, got {parsed_payload!r}"
-            )
+        assert last_topic == "z2m/Lounge Lamp/set"
+        assert json.loads(last_payload) == {"state": "ON"}
 
     def test_on_message_logs_failing_callback(self, fake_paho, caplog):
         """Regression: subscriber callbacks that raise must be logged, not silently swallowed.
@@ -313,10 +294,8 @@ class TestBridgeClient:
         with caplog.at_level(logging.WARNING, logger="cli_anything.zigbee2mqtt.core.mqtt_client"):
             c._on_message(None, None, FakeMsg())  # type: ignore[arg-type]
 
-        if not any("boom" in record.message for record in caplog.records):
-            raise AssertionError(
-                "Expected a log record containing 'boom' from the failing callback"
-            )
+        assert any("boom" in record.message for record in caplog.records), \
+            "Expected a log record containing 'boom' from the failing callback"
 
 
 
@@ -335,8 +314,7 @@ class TestMqttClientNoDeadCode:
         imports = [n.names[0].name for n in ast.walk(tree)
                    if isinstance(n, ast.Import) and
                       any(x.name == 'time' for x in n.names)]
-        if imports:
-            raise AssertionError(f"'time' module still imported: {imports}")
+        assert not imports, f"'time' module still imported: {imports}"
 
     def test_no_time_attribute_used(self):
         """No code in mqtt_client.py must call time.sleep / time.time / etc."""
@@ -349,18 +327,15 @@ class TestMqttClientNoDeadCode:
                if (isinstance(n, ast.Attribute)
                    and isinstance(n.value, ast.Name)
                    and n.value.id == 'time')]
-        if bad:
-            raise AssertionError(f"time module still used: {bad}")
+        assert not bad, f"time module still used: {bad}"
 
     def test_no_useless_instance_vars(self, fake_paho):
         """_username and _password must not be stored as dead instance vars."""
         # Import inside test so fake_paho fixture has already patched mc.mqtt
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
         c = mc.BridgeClient("fake-host")
-        if hasattr(c, '_username'):
-            raise AssertionError("_username is a dead instance var")
-        if hasattr(c, '_password'):
-            raise AssertionError("_password is a dead instance var")
+        assert not hasattr(c, '_username'), "_username is a dead instance var"
+        assert not hasattr(c, '_password'), "_password is a dead instance var"
 
     def test_pending_dict_no_path_key(self):
         """The 'path' key must not be stored in _pending (unused once stored)."""
@@ -368,7 +343,5 @@ class TestMqttClientNoDeadCode:
         from cli_anything.zigbee2mqtt.core import mqtt_client as mc
         src = inspect.getsource(mc)
         # _pending[txn] = {…} must contain only 'event' and 'slot'
-        if '_pending[txn] = {"event": event, "slot": slot}' not in src:
-            raise AssertionError(
-                "_pending must only contain 'event' and 'slot' keys"
-            )
+        assert '_pending[txn] = {"event": event, "slot": slot}' in src, \
+            "_pending must only contain 'event' and 'slot' keys"
