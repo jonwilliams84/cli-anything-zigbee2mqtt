@@ -24,8 +24,7 @@ from __future__ import annotations
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
 
 
-def add(client: BridgeClient, value: str, *,
-         timeout: float = 10.0) -> dict:
+def add(client: BridgeClient, value: str, *, timeout: float = 10.0) -> dict:
     """Pre-register an install code on the coordinator.
 
     *value* can be the device's QR-code text or a raw
@@ -33,12 +32,10 @@ def add(client: BridgeClient, value: str, *,
     """
     if not value:
         raise ValueError("value is required (QR text or ieee:install_code)")
-    return client.request("install_code/add", payload={"value": value},
-                            timeout=timeout)
+    return client.request("install_code/add", payload={"value": value}, timeout=timeout)
 
 
-def remove(client: BridgeClient, value: str, *,
-            timeout: float = 10.0) -> dict:
+def remove(client: BridgeClient, value: str, *, timeout: float = 10.0) -> dict:
     """Remove a previously-added install code.
 
     *value* should be the same string that was passed to :func:`add`. Z2M
@@ -47,5 +44,4 @@ def remove(client: BridgeClient, value: str, *,
     """
     if not value:
         raise ValueError("value is required")
-    return client.request("install_code/remove", payload={"value": value},
-                            timeout=timeout)
+    return client.request("install_code/remove", payload={"value": value}, timeout=timeout)

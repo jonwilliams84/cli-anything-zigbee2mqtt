@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
 
@@ -14,9 +14,7 @@ logger = logging.getLogger(__name__)
 
 def info(client: BridgeClient, *, timeout: float = 5.0) -> dict:
     """Retained `bridge/info` — z2m version, coordinator, network params."""
-    raw = client.collect_retained(
-        f"{client.base_topic}/bridge/info", timeout=timeout
-    )
+    raw = client.collect_retained(f"{client.base_topic}/bridge/info", timeout=timeout)
     if not raw:
         return {}
     try:
@@ -27,9 +25,7 @@ def info(client: BridgeClient, *, timeout: float = 5.0) -> dict:
 
 def state(client: BridgeClient, *, timeout: float = 3.0) -> str:
     """Retained `bridge/state` — typically 'online' / 'offline'."""
-    raw = client.collect_retained(
-        f"{client.base_topic}/bridge/state", timeout=timeout
-    ) or ""
+    raw = client.collect_retained(f"{client.base_topic}/bridge/state", timeout=timeout) or ""
     raw = raw.strip()
     if raw.startswith("{"):
         try:
@@ -54,15 +50,16 @@ def options_get(client: BridgeClient, *, timeout: float = 5.0) -> dict:
     return client.request("options", payload={}, timeout=timeout)
 
 
-def options_set(client: BridgeClient, options: dict, *,
-                 timeout: float = 10.0) -> dict:
-    return client.request("options", payload={"options": options},
-                            timeout=timeout)
+def options_set(client: BridgeClient, options: dict, *, timeout: float = 10.0) -> dict:
+    return client.request("options", payload={"options": options}, timeout=timeout)
 
 
-def watch_logging(client: BridgeClient, *,
-                    duration: Optional[float] = None,
-                    callback: Optional[Callable[[dict], None]] = None) -> list[dict]:
+def watch_logging(
+    client: BridgeClient,
+    *,
+    duration: Optional[float] = None,
+    callback: Optional[Callable[[dict], None]] = None,
+) -> list[dict]:
     """Tail `bridge/logging` for N seconds (None = until interrupted)."""
     collected: list[dict] = []
 
@@ -75,10 +72,11 @@ def watch_logging(client: BridgeClient, *,
         if callback:
             try:
                 callback(data)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # user callback errors must not break the tail loop; log and record
                 logger.warning("watch_logging callback raised: %s", exc, exc_info=True)
                 data["_callback_error"] = str(exc)
+
     client.subscribe(f"{client.base_topic}/bridge/logging", _cb)
     end = time.time() + duration if duration else None
     try:
@@ -89,9 +87,12 @@ def watch_logging(client: BridgeClient, *,
     return collected
 
 
-def watch_events(client: BridgeClient, *,
-                  duration: Optional[float] = None,
-                  callback: Optional[Callable[[dict], None]] = None) -> list[dict]:
+def watch_events(
+    client: BridgeClient,
+    *,
+    duration: Optional[float] = None,
+    callback: Optional[Callable[[dict], None]] = None,
+) -> list[dict]:
     """Tail `bridge/event` — device joined/removed, OTA progress, etc."""
     collected: list[dict] = []
 
@@ -104,10 +105,11 @@ def watch_events(client: BridgeClient, *,
         if callback:
             try:
                 callback(data)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # user callback errors must not break the tail loop; log and record
                 logger.warning("watch_events callback raised: %s", exc, exc_info=True)
                 data["_callback_error"] = str(exc)
+
     client.subscribe(f"{client.base_topic}/bridge/event", _cb)
     end = time.time() + duration if duration else None
     try:

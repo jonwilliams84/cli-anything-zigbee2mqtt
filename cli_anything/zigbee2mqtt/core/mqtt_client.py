@@ -37,16 +37,20 @@ class BridgeClient:
     or call `connect()` / `disconnect()` explicitly.
     """
 
-    def __init__(self, host: str, port: int = 1883, *,
-                 username: Optional[str] = None,
-                 password: Optional[str] = None,
-                 base_topic: str = "zigbee2mqtt",
-                 client_id: Optional[str] = None,
-                 keepalive: int = 30) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int = 1883,
+        *,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        base_topic: str = "zigbee2mqtt",
+        client_id: Optional[str] = None,
+        keepalive: int = 30,
+    ) -> None:
         if mqtt is None:
             raise MqttError(
-                "paho-mqtt not installed — pip install paho-mqtt "
-                "or reinstall the harness."
+                "paho-mqtt not installed — pip install paho-mqtt or reinstall the harness."
             )
         self.host = host
         self.port = port
@@ -91,8 +95,7 @@ class BridgeClient:
 
     # ── bridge request/response ─────────────────────────────────────────
 
-    def request(self, path: str, payload: Any = None, *,
-                 timeout: float = 15.0) -> dict:
+    def request(self, path: str, payload: Any = None, *, timeout: float = 15.0) -> dict:
         """Send a bridge request and wait for the matching response.
 
         `path` is e.g. "device/rename" — the leading `bridge/request/` is added.
@@ -164,13 +167,12 @@ class BridgeClient:
             if mqtt.topic_matches_sub(filt, topic):
                 try:
                     cb(topic, payload)
-                except Exception as exc:  # noqa: B110 — log instead of silently pass
+                except Exception as exc:
                     logger.warning("subscriber callback %r failed for topic %s: %s", cb, topic, exc)
 
     # ── generic publish / subscribe ─────────────────────────────────────
 
-    def publish(self, topic: str, payload: Any, *, retain: bool = False,
-                 qos: int = 0) -> int:
+    def publish(self, topic: str, payload: Any, *, retain: bool = False, qos: int = 0) -> int:
         if not self._connected:
             self.connect()
         if isinstance(payload, (dict, list)):
@@ -203,6 +205,7 @@ class BridgeClient:
         def _cb(_t, p):
             slot["payload"] = p
             event.set()
+
         self.subscribe(topic, _cb)
         event.wait(timeout=timeout)
         return slot.get("payload")

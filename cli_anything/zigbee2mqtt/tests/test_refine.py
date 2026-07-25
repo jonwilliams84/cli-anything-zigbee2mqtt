@@ -28,6 +28,7 @@ from cli_anything.zigbee2mqtt.core import install_code as install_code_core
 
 # ─────────────────────────────────────────────────────────── fake client
 
+
 class FakeClient:
     """Minimum surface for the new core modules.
 
@@ -53,11 +54,8 @@ class FakeClient:
         self._retained_payloads[topic] = payload
 
     def request(self, path: str, payload=None, *, timeout: float = 0):
-        self.requests.append({"path": path, "payload": payload,
-                                "timeout": timeout})
-        return self._request_responses.get(
-            path, {"status": "ok", "data": {}}
-        )
+        self.requests.append({"path": path, "payload": payload, "timeout": timeout})
+        return self._request_responses.get(path, {"status": "ok", "data": {}})
 
     def collect_retained(self, topic: str, *, timeout: float = 0):
         self.retained_calls.append(topic)
@@ -73,10 +71,10 @@ def fc() -> FakeClient:
 # bindings
 # ════════════════════════════════════════════════════════════════════════
 
+
 class TestBindings:
     def test_bind_default_clusters(self, fc):
-        fc.set_request("device/bind", {"status": "ok",
-                                          "data": {"clusters": ["genOnOff"]}})
+        fc.set_request("device/bind", {"status": "ok", "data": {"clusters": ["genOnOff"]}})
         result = bindings_core.bind(fc, from_="switch_kitchen", to="light_kitchen")
         call = fc.requests[0]
         assert call["path"] == "device/bind"
@@ -86,11 +84,8 @@ class TestBindings:
 
     def test_bind_explicit_clusters(self, fc):
         fc.set_request("device/bind", {"status": "ok"})
-        bindings_core.bind(fc, from_="A", to="B",
-                              clusters=["genOnOff", "genLevelCtrl"])
-        assert fc.requests[0]["payload"]["clusters"] == [
-            "genOnOff", "genLevelCtrl"
-        ]
+        bindings_core.bind(fc, from_="A", to="B", clusters=["genOnOff", "genLevelCtrl"])
+        assert fc.requests[0]["payload"]["clusters"] == ["genOnOff", "genLevelCtrl"]
 
     def test_bind_missing_from(self, fc):
         with pytest.raises(ValueError, match="from_"):
@@ -111,18 +106,31 @@ class TestBindings:
             bindings_core.unbind(fc, from_="", to="")
 
     def test_list_bindings_all(self, fc):
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "switch", "ieee_address": "0xAAA",
-             "endpoints": {"1": {"bindings": [
-                 {"cluster": "genOnOff",
-                  "target": {"type": "endpoint",
-                              "ieee_address": "0xBBB", "endpoint": 1}},
-                 {"cluster": "genLevelCtrl",
-                  "target": {"type": "group", "id": 42}},
-             ]}}},
-            {"friendly_name": "lamp", "ieee_address": "0xBBB",
-             "endpoints": {}},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {
+                    "friendly_name": "switch",
+                    "ieee_address": "0xAAA",
+                    "endpoints": {
+                        "1": {
+                            "bindings": [
+                                {
+                                    "cluster": "genOnOff",
+                                    "target": {
+                                        "type": "endpoint",
+                                        "ieee_address": "0xBBB",
+                                        "endpoint": 1,
+                                    },
+                                },
+                                {"cluster": "genLevelCtrl", "target": {"type": "group", "id": 42}},
+                            ]
+                        }
+                    },
+                },
+                {"friendly_name": "lamp", "ieee_address": "0xBBB", "endpoints": {}},
+            ],
+        )
         rows = bindings_core.list_bindings(fc)
         assert len(rows) == 2
         on_off = next(r for r in rows if r["cluster"] == "genOnOff")
@@ -138,34 +146,72 @@ class TestBindings:
         assert grp["to_ieee"] is None
 
     def test_list_bindings_filter_by_device(self, fc):
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "switch", "ieee_address": "0xAAA",
-             "endpoints": {"1": {"bindings": [
-                 {"cluster": "genOnOff",
-                  "target": {"type": "endpoint",
-                              "ieee_address": "0xBBB", "endpoint": 1}},
-             ]}}},
-            {"friendly_name": "remote", "ieee_address": "0xCCC",
-             "endpoints": {"1": {"bindings": [
-                 {"cluster": "genOnOff",
-                  "target": {"type": "group", "id": 7}},
-             ]}}},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {
+                    "friendly_name": "switch",
+                    "ieee_address": "0xAAA",
+                    "endpoints": {
+                        "1": {
+                            "bindings": [
+                                {
+                                    "cluster": "genOnOff",
+                                    "target": {
+                                        "type": "endpoint",
+                                        "ieee_address": "0xBBB",
+                                        "endpoint": 1,
+                                    },
+                                },
+                            ]
+                        }
+                    },
+                },
+                {
+                    "friendly_name": "remote",
+                    "ieee_address": "0xCCC",
+                    "endpoints": {
+                        "1": {
+                            "bindings": [
+                                {"cluster": "genOnOff", "target": {"type": "group", "id": 7}},
+                            ]
+                        }
+                    },
+                },
+            ],
+        )
         rows = bindings_core.list_bindings(fc, device_ident="switch")
         assert len(rows) == 1
         assert rows[0]["from_device"] == "switch"
 
     def test_list_bindings_filter_by_ieee(self, fc):
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "switch", "ieee_address": "0xAAA",
-             "endpoints": {"1": {"bindings": [
-                 {"cluster": "genOnOff",
-                  "target": {"type": "group", "id": 1}}]}}},
-            {"friendly_name": "remote", "ieee_address": "0xCCC",
-             "endpoints": {"1": {"bindings": [
-                 {"cluster": "genOnOff",
-                  "target": {"type": "group", "id": 2}}]}}},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {
+                    "friendly_name": "switch",
+                    "ieee_address": "0xAAA",
+                    "endpoints": {
+                        "1": {
+                            "bindings": [
+                                {"cluster": "genOnOff", "target": {"type": "group", "id": 1}}
+                            ]
+                        }
+                    },
+                },
+                {
+                    "friendly_name": "remote",
+                    "ieee_address": "0xCCC",
+                    "endpoints": {
+                        "1": {
+                            "bindings": [
+                                {"cluster": "genOnOff", "target": {"type": "group", "id": 2}}
+                            ]
+                        }
+                    },
+                },
+            ],
+        )
         rows = bindings_core.list_bindings(fc, device_ident="0xCCC")
         assert len(rows) == 1
         assert rows[0]["from_device"] == "remote"
@@ -174,10 +220,13 @@ class TestBindings:
         assert bindings_core.list_bindings(fc) == []
 
     def test_list_bindings_skips_malformed(self, fc):
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "x", "endpoints": "not a dict"},
-            {"friendly_name": "y", "endpoints": {"1": "not a dict"}},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {"friendly_name": "x", "endpoints": "not a dict"},
+                {"friendly_name": "y", "endpoints": {"1": "not a dict"}},
+            ],
+        )
         assert bindings_core.list_bindings(fc) == []
 
 
@@ -185,10 +234,10 @@ class TestBindings:
 # devices extras
 # ════════════════════════════════════════════════════════════════════════
 
+
 class TestDevicesReadState:
     def test_read_state_happy(self, fc):
-        fc.set_retained("zigbee2mqtt/Lounge Lamp",
-                          {"state": "ON", "brightness": 200})
+        fc.set_retained("zigbee2mqtt/Lounge Lamp", {"state": "ON", "brightness": 200})
         result = devices_core.read_state(fc, "Lounge Lamp")
         assert result == {"state": "ON", "brightness": 200}
         assert fc.retained_calls == ["zigbee2mqtt/Lounge Lamp"]
@@ -212,16 +261,33 @@ class TestDevicesStale:
     def test_stale_over_threshold(self, fc):
         old = (self._now() - _dt.timedelta(hours=3)).isoformat()
         fresh = (self._now() - _dt.timedelta(minutes=1)).isoformat()
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "old_dev", "ieee_address": "0xA",
-             "type": "EndDevice", "last_seen": old,
-             "definition": {"model": "M1"}, "power_source": "Battery"},
-            {"friendly_name": "fresh_dev", "ieee_address": "0xB",
-             "type": "EndDevice", "last_seen": fresh,
-             "definition": {"model": "M2"}, "power_source": "Battery"},
-            {"friendly_name": "coord", "ieee_address": "0xC",
-             "type": "Coordinator", "last_seen": old},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {
+                    "friendly_name": "old_dev",
+                    "ieee_address": "0xA",
+                    "type": "EndDevice",
+                    "last_seen": old,
+                    "definition": {"model": "M1"},
+                    "power_source": "Battery",
+                },
+                {
+                    "friendly_name": "fresh_dev",
+                    "ieee_address": "0xB",
+                    "type": "EndDevice",
+                    "last_seen": fresh,
+                    "definition": {"model": "M2"},
+                    "power_source": "Battery",
+                },
+                {
+                    "friendly_name": "coord",
+                    "ieee_address": "0xC",
+                    "type": "Coordinator",
+                    "last_seen": old,
+                },
+            ],
+        )
         result = devices_core.find_stale(fc, threshold_minutes=60)
         assert len(result) == 1
         assert result[0]["friendly_name"] == "old_dev"
@@ -229,67 +295,91 @@ class TestDevicesStale:
 
     def test_stale_skip_routers(self, fc):
         old = (self._now() - _dt.timedelta(hours=3)).isoformat()
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "router1", "type": "Router",
-             "last_seen": old, "definition": {}},
-            {"friendly_name": "end1", "type": "EndDevice",
-             "last_seen": old, "definition": {}},
-        ])
-        result = devices_core.find_stale(fc, threshold_minutes=60,
-                                            include_routers=False)
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {"friendly_name": "router1", "type": "Router", "last_seen": old, "definition": {}},
+                {"friendly_name": "end1", "type": "EndDevice", "last_seen": old, "definition": {}},
+            ],
+        )
+        result = devices_core.find_stale(fc, threshold_minutes=60, include_routers=False)
         names = [r["friendly_name"] for r in result]
         assert names == ["end1"]
 
     def test_stale_skip_end_devices(self, fc):
         old = (self._now() - _dt.timedelta(hours=3)).isoformat()
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "router1", "type": "Router",
-             "last_seen": old, "definition": {}},
-            {"friendly_name": "end1", "type": "EndDevice",
-             "last_seen": old, "definition": {}},
-        ])
-        result = devices_core.find_stale(fc, threshold_minutes=60,
-                                            include_end_devices=False)
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {"friendly_name": "router1", "type": "Router", "last_seen": old, "definition": {}},
+                {"friendly_name": "end1", "type": "EndDevice", "last_seen": old, "definition": {}},
+            ],
+        )
+        result = devices_core.find_stale(fc, threshold_minutes=60, include_end_devices=False)
         assert [r["friendly_name"] for r in result] == ["router1"]
 
     def test_stale_sorted_by_oldest_first(self, fc):
         n = self._now()
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "d1", "type": "EndDevice",
-             "last_seen": (n - _dt.timedelta(hours=2)).isoformat(),
-             "definition": {}},
-            {"friendly_name": "d2", "type": "EndDevice",
-             "last_seen": (n - _dt.timedelta(hours=8)).isoformat(),
-             "definition": {}},
-            {"friendly_name": "d3", "type": "EndDevice",
-             "last_seen": (n - _dt.timedelta(hours=5)).isoformat(),
-             "definition": {}},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {
+                    "friendly_name": "d1",
+                    "type": "EndDevice",
+                    "last_seen": (n - _dt.timedelta(hours=2)).isoformat(),
+                    "definition": {},
+                },
+                {
+                    "friendly_name": "d2",
+                    "type": "EndDevice",
+                    "last_seen": (n - _dt.timedelta(hours=8)).isoformat(),
+                    "definition": {},
+                },
+                {
+                    "friendly_name": "d3",
+                    "type": "EndDevice",
+                    "last_seen": (n - _dt.timedelta(hours=5)).isoformat(),
+                    "definition": {},
+                },
+            ],
+        )
         result = devices_core.find_stale(fc, threshold_minutes=60)
         assert [r["friendly_name"] for r in result] == ["d2", "d3", "d1"]
 
     def test_stale_unparseable_last_seen(self, fc):
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "weird", "type": "EndDevice",
-             "last_seen": "tomorrow", "definition": {}},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {
+                    "friendly_name": "weird",
+                    "type": "EndDevice",
+                    "last_seen": "tomorrow",
+                    "definition": {},
+                },
+            ],
+        )
         assert devices_core.find_stale(fc, threshold_minutes=60) == []
 
     def test_stale_missing_last_seen(self, fc):
-        fc.set_retained("zigbee2mqtt/bridge/devices", [
-            {"friendly_name": "never_seen", "type": "EndDevice",
-             "definition": {}},
-        ])
+        fc.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            [
+                {"friendly_name": "never_seen", "type": "EndDevice", "definition": {}},
+            ],
+        )
         assert devices_core.find_stale(fc, threshold_minutes=60) == []
 
 
 class TestGenerateExternalDefinition:
     def test_happy(self, fc):
-        fc.set_request("device/generate_external_definition", {
-            "status": "ok",
-            "source": "module.exports = { ... }",
-            "model": "ZX-100",
-        })
+        fc.set_request(
+            "device/generate_external_definition",
+            {
+                "status": "ok",
+                "source": "module.exports = { ... }",
+                "model": "ZX-100",
+            },
+        )
         result = devices_core.generate_external_definition(fc, "kitchen-sensor")
         assert result["source"].startswith("module.exports")
         call = fc.requests[0]
@@ -306,10 +396,13 @@ class TestConfigureReporting:
         fc.set_request("device/configure_reporting", {"status": "ok"})
         devices_core.configure_reporting(
             fc,
-            id_="kitchen-temp", cluster="msTemperatureMeasurement",
+            id_="kitchen-temp",
+            cluster="msTemperatureMeasurement",
             attribute="measuredValue",
-            minimum_report_interval=30, maximum_report_interval=3600,
-            reportable_change=10, endpoint=1,
+            minimum_report_interval=30,
+            maximum_report_interval=3600,
+            reportable_change=10,
+            endpoint=1,
         )
         call = fc.requests[0]
         assert call["path"] == "device/configure_reporting"
@@ -326,8 +419,12 @@ class TestConfigureReporting:
     def test_happy_without_change(self, fc):
         fc.set_request("device/configure_reporting", {"status": "ok"})
         devices_core.configure_reporting(
-            fc, id_="d1", cluster="genOnOff", attribute="onOff",
-            minimum_report_interval=0, maximum_report_interval=300,
+            fc,
+            id_="d1",
+            cluster="genOnOff",
+            attribute="onOff",
+            minimum_report_interval=0,
+            maximum_report_interval=300,
         )
         payload = fc.requests[0]["payload"]
         assert "reportable_change" not in payload
@@ -336,33 +433,50 @@ class TestConfigureReporting:
     def test_rejects_missing_id(self, fc):
         with pytest.raises(ValueError):
             devices_core.configure_reporting(
-                fc, id_="", cluster="x", attribute="y",
-                minimum_report_interval=0, maximum_report_interval=0,
+                fc,
+                id_="",
+                cluster="x",
+                attribute="y",
+                minimum_report_interval=0,
+                maximum_report_interval=0,
             )
 
     def test_rejects_missing_cluster_or_attribute(self, fc):
         with pytest.raises(ValueError, match="cluster"):
             devices_core.configure_reporting(
-                fc, id_="d", cluster="", attribute="y",
-                minimum_report_interval=0, maximum_report_interval=0,
+                fc,
+                id_="d",
+                cluster="",
+                attribute="y",
+                minimum_report_interval=0,
+                maximum_report_interval=0,
             )
         with pytest.raises(ValueError, match="cluster"):
             devices_core.configure_reporting(
-                fc, id_="d", cluster="c", attribute="",
-                minimum_report_interval=0, maximum_report_interval=0,
+                fc,
+                id_="d",
+                cluster="c",
+                attribute="",
+                minimum_report_interval=0,
+                maximum_report_interval=0,
             )
 
     def test_rejects_negative_intervals(self, fc):
         with pytest.raises(ValueError, match="intervals"):
             devices_core.configure_reporting(
-                fc, id_="d", cluster="c", attribute="a",
-                minimum_report_interval=-1, maximum_report_interval=10,
+                fc,
+                id_="d",
+                cluster="c",
+                attribute="a",
+                minimum_report_interval=-1,
+                maximum_report_interval=10,
             )
 
 
 # ════════════════════════════════════════════════════════════════════════
 # install_code
 # ════════════════════════════════════════════════════════════════════════
+
 
 class TestInstallCode:
     def test_add(self, fc):
@@ -390,11 +504,11 @@ class TestInstallCode:
 # groups.options
 # ════════════════════════════════════════════════════════════════════════
 
+
 class TestGroupOptions:
     def test_happy(self, fc):
         fc.set_request("group/options", {"status": "ok"})
-        groups_core.options(fc, "kitchen-lights",
-                              {"transition": 1.5, "retain": True})
+        groups_core.options(fc, "kitchen-lights", {"transition": 1.5, "retain": True})
         call = fc.requests[0]
         assert call["path"] == "group/options"
         assert call["payload"] == {
@@ -414,6 +528,7 @@ class TestGroupOptions:
 # ════════════════════════════════════════════════════════════════════════
 # extensions
 # ════════════════════════════════════════════════════════════════════════
+
 
 class TestExtensions:
     SAMPLE = [
@@ -450,8 +565,7 @@ class TestExtensions:
 
     def test_save_happy(self, fc):
         fc.set_request("extension/save", {"status": "ok"})
-        extensions_core.save(fc, name="my-ext.js",
-                                code="module.exports = class {};")
+        extensions_core.save(fc, name="my-ext.js", code="module.exports = class {};")
         call = fc.requests[0]
         assert call["path"] == "extension/save"
         assert call["payload"]["name"] == "my-ext.js"
@@ -469,8 +583,7 @@ class TestExtensions:
         f = tmp_path / "ext.js"
         f.write_text("module.exports = function(){};")
         fc.set_request("extension/save", {"status": "ok"})
-        extensions_core.save_from_file(fc, name="ext.js",
-                                          local_path=str(f))
+        extensions_core.save_from_file(fc, name="ext.js", local_path=str(f))
         assert "function" in fc.requests[0]["payload"]["code"]
 
     def test_remove_happy(self, fc):

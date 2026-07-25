@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Optional
+from typing import Optional
 
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
 
 
 def list_devices(client: BridgeClient, *, timeout: float = 5.0) -> list[dict]:
-    raw = client.collect_retained(
-        f"{client.base_topic}/bridge/devices", timeout=timeout
-    )
+    raw = client.collect_retained(f"{client.base_topic}/bridge/devices", timeout=timeout)
     if not raw:
         return []
     try:
@@ -38,67 +36,96 @@ def summarize(devices: list[dict]) -> list[dict]:
     out: list[dict] = []
     for d in devices:
         defn = d.get("definition") or {}
-        out.append({
-            "friendly_name": d.get("friendly_name"),
-            "ieee_address": d.get("ieee_address"),
-            "model": defn.get("model"),
-            "vendor": defn.get("vendor"),
-            "type": d.get("type"),
-            "manufacturer": d.get("manufacturer"),
-            "power_source": d.get("power_source"),
-            "interview_completed": d.get("interview_completed"),
-            "supported": d.get("supported"),
-            "disabled": d.get("disabled", False),
-            "description": d.get("description"),
-        })
+        out.append(
+            {
+                "friendly_name": d.get("friendly_name"),
+                "ieee_address": d.get("ieee_address"),
+                "model": defn.get("model"),
+                "vendor": defn.get("vendor"),
+                "type": d.get("type"),
+                "manufacturer": d.get("manufacturer"),
+                "power_source": d.get("power_source"),
+                "interview_completed": d.get("interview_completed"),
+                "supported": d.get("supported"),
+                "disabled": d.get("disabled", False),
+                "description": d.get("description"),
+            }
+        )
     return out
 
 
 # ── mutation primitives ─────────────────────────────────────────────────
 
-def rename(client: BridgeClient, *, from_: str, to: str,
-           homeassistant_rename: bool = True,
-           timeout: float = 15.0) -> dict:
+
+def rename(
+    client: BridgeClient,
+    *,
+    from_: str,
+    to: str,
+    homeassistant_rename: bool = True,
+    timeout: float = 15.0,
+) -> dict:
     """Rename a device. `homeassistant_rename` also renames the HA entities so
     the unique_id is preserved (default true — almost always what you want)."""
-    return client.request("device/rename", payload={
-        "from": from_, "to": to, "homeassistant_rename": homeassistant_rename,
-    }, timeout=timeout)
+    return client.request(
+        "device/rename",
+        payload={
+            "from": from_,
+            "to": to,
+            "homeassistant_rename": homeassistant_rename,
+        },
+        timeout=timeout,
+    )
 
 
-def remove(client: BridgeClient, id_: str, *,
-           force: bool = False, block: bool = False,
-           timeout: float = 30.0) -> dict:
+def remove(
+    client: BridgeClient,
+    id_: str,
+    *,
+    force: bool = False,
+    block: bool = False,
+    timeout: float = 30.0,
+) -> dict:
     """Remove a device from the network (and from z2m's database).
 
     force=True skips network-level removal (useful when the device is already
     physically gone). block=True adds it to the block-list so it can't rejoin.
     """
-    return client.request("device/remove", payload={
-        "id": id_, "force": force, "block": block,
-    }, timeout=timeout)
+    return client.request(
+        "device/remove",
+        payload={
+            "id": id_,
+            "force": force,
+            "block": block,
+        },
+        timeout=timeout,
+    )
 
 
 def configure(client: BridgeClient, id_: str, *, timeout: float = 30.0) -> dict:
     """Re-run device configuration (re-bindings, reports). Use after a device
     starts reporting wrong values or never set up reports correctly."""
-    return client.request("device/configure", payload={"id": id_},
-                           timeout=timeout)
+    return client.request("device/configure", payload={"id": id_}, timeout=timeout)
 
 
 def interview(client: BridgeClient, id_: str, *, timeout: float = 60.0) -> dict:
     """Force a fresh device interview (re-read endpoints, clusters, model).
     Slow — typically 30+ seconds while the device wakes up."""
-    return client.request("device/interview", payload={"id": id_},
-                           timeout=timeout)
+    return client.request("device/interview", payload={"id": id_}, timeout=timeout)
 
 
-def options(client: BridgeClient, id_: str, options_payload: dict,
-            *, timeout: float = 10.0) -> dict:
+def options(
+    client: BridgeClient, id_: str, options_payload: dict, *, timeout: float = 10.0
+) -> dict:
     """Set per-device options (z2m's `device_options` block)."""
-    return client.request("device/options", payload={
-        "id": id_, "options": options_payload,
-    }, timeout=timeout)
+    return client.request(
+        "device/options",
+        payload={
+            "id": id_,
+            "options": options_payload,
+        },
+        timeout=timeout,
+    )
 
 
 def set_value(client: BridgeClient, friendly_name: str, fields: dict) -> int:
@@ -114,8 +141,9 @@ def get_value(client: BridgeClient, friendly_name: str, keys: list[str]) -> int:
     return client.publish(topic, payload)
 
 
-def watch_device(client: BridgeClient, friendly_name: str, *,
-                  duration: Optional[float] = None) -> list[dict]:
+def watch_device(
+    client: BridgeClient, friendly_name: str, *, duration: Optional[float] = None
+) -> list[dict]:
     """Tail the device's state topic for N seconds."""
     topic = f"{client.base_topic}/{friendly_name}"
     collected: list[dict] = []
@@ -125,6 +153,7 @@ def watch_device(client: BridgeClient, friendly_name: str, *,
             collected.append(json.loads(p))
         except json.JSONDecodeError:
             collected.append({"raw": p})
+
     client.subscribe(topic, _cb)
     end = time.time() + duration if duration else None
     try:
@@ -137,8 +166,8 @@ def watch_device(client: BridgeClient, friendly_name: str, *,
 
 # ── one-shot retained state read ────────────────────────────────────────
 
-def read_state(client: BridgeClient, friendly_name: str, *,
-                timeout: float = 3.0) -> dict:
+
+def read_state(client: BridgeClient, friendly_name: str, *, timeout: float = 3.0) -> dict:
     """Return the current retained state payload for a device.
 
     z2m publishes the latest state on ``<base>/<friendly_name>`` with
@@ -160,11 +189,15 @@ def read_state(client: BridgeClient, friendly_name: str, *,
 
 # ── staleness sweep (local filter on bridge/devices.last_seen) ──────────
 
-def find_stale(client: BridgeClient, *,
-                threshold_minutes: int = 60,
-                include_routers: bool = True,
-                include_end_devices: bool = True,
-                timeout: float = 5.0) -> list[dict]:
+
+def find_stale(
+    client: BridgeClient,
+    *,
+    threshold_minutes: int = 60,
+    include_routers: bool = True,
+    include_end_devices: bool = True,
+    timeout: float = 5.0,
+) -> list[dict]:
     """Rank devices by how long they've been silent.
 
     z2m records ``last_seen`` (ISO-8601 string when the last message
@@ -181,6 +214,7 @@ def find_stale(client: BridgeClient, *,
         }
     """
     import datetime as _dt
+
     devices = list_devices(client, timeout=timeout)
     now = _dt.datetime.now(_dt.timezone.utc)
     out: list[dict] = []
@@ -209,23 +243,25 @@ def find_stale(client: BridgeClient, *,
         if mins is None or mins < threshold_minutes:
             continue
         defn = d.get("definition") or {}
-        out.append({
-            "friendly_name": d.get("friendly_name"),
-            "ieee_address": d.get("ieee_address"),
-            "type": kind,
-            "model": defn.get("model"),
-            "last_seen": last,
-            "minutes_since_seen": round(mins, 1),
-            "power_source": d.get("power_source"),
-        })
+        out.append(
+            {
+                "friendly_name": d.get("friendly_name"),
+                "ieee_address": d.get("ieee_address"),
+                "type": kind,
+                "model": defn.get("model"),
+                "last_seen": last,
+                "minutes_since_seen": round(mins, 1),
+                "power_source": d.get("power_source"),
+            }
+        )
     out.sort(key=lambda r: r["minutes_since_seen"] or 0, reverse=True)
     return out
 
 
 # ── definition generator (for unsupported devices) ──────────────────────
 
-def generate_external_definition(client: BridgeClient, id_: str, *,
-                                  timeout: float = 30.0) -> dict:
+
+def generate_external_definition(client: BridgeClient, id_: str, *, timeout: float = 30.0) -> dict:
     """Ask z2m to generate a starter external-converter `.js` for a device.
 
     z2m walks the device's interview data (endpoints / clusters /
@@ -237,21 +273,26 @@ def generate_external_definition(client: BridgeClient, id_: str, *,
     """
     if not id_:
         raise ValueError("id_ is required (friendly_name or ieee_address)")
-    return client.request("device/generate_external_definition",
-                            payload={"id": id_}, timeout=timeout)
+    return client.request(
+        "device/generate_external_definition", payload={"id": id_}, timeout=timeout
+    )
 
 
 # ── manual reporting configuration ──────────────────────────────────────
 
-def configure_reporting(client: BridgeClient, *,
-                          id_: str,
-                          cluster: str,
-                          attribute: str,
-                          minimum_report_interval: int,
-                          maximum_report_interval: int,
-                          reportable_change: Optional[float] = None,
-                          endpoint: Optional[int] = None,
-                          timeout: float = 15.0) -> dict:
+
+def configure_reporting(
+    client: BridgeClient,
+    *,
+    id_: str,
+    cluster: str,
+    attribute: str,
+    minimum_report_interval: int,
+    maximum_report_interval: int,
+    reportable_change: Optional[float] = None,
+    endpoint: Optional[int] = None,
+    timeout: float = 15.0,
+) -> dict:
     """Set up a single attribute report on a device endpoint.
 
     z2m's default reporting setup (run during interview / configure)
@@ -282,5 +323,4 @@ def configure_reporting(client: BridgeClient, *,
         payload["reportable_change"] = reportable_change
     if endpoint is not None:
         payload["endpoint"] = int(endpoint)
-    return client.request("device/configure_reporting", payload=payload,
-                            timeout=timeout)
+    return client.request("device/configure_reporting", payload=payload, timeout=timeout)

@@ -35,8 +35,10 @@ from cli_anything.zigbee2mqtt.core import devices as devices_core
 
 # ──────────────────────────────────────────────────────────── mutators
 
+
 def bind(
-    client: BridgeClient, *,
+    client: BridgeClient,
+    *,
     from_: str,
     to: str,
     clusters: Optional[list[str]] = None,
@@ -56,7 +58,8 @@ def bind(
 
 
 def unbind(
-    client: BridgeClient, *,
+    client: BridgeClient,
+    *,
     from_: str,
     to: str,
     clusters: Optional[list[str]] = None,
@@ -73,8 +76,10 @@ def unbind(
 
 # ──────────────────────────────────────────────────────── introspection
 
+
 def list_bindings(
-    client: BridgeClient, *,
+    client: BridgeClient,
+    *,
     device_ident: Optional[str] = None,
     timeout: float = 5.0,
 ) -> list[dict]:
@@ -120,7 +125,7 @@ def list_bindings(
                 ep_num = int(ep_id)
             except (TypeError, ValueError):
                 ep_num = ep_id  # type: ignore[assignment]
-            for b in (ep.get("bindings") or []):
+            for b in ep.get("bindings") or []:
                 if not isinstance(b, dict):
                     continue
                 cluster = b.get("cluster")
@@ -145,8 +150,7 @@ def list_bindings(
                     # Best-effort friendly_name lookup by ieee
                     if row["to_ieee"]:
                         for cand in devices:
-                            if (cand.get("ieee_address") or "").lower() \
-                                    == row["to_ieee"].lower():
+                            if (cand.get("ieee_address") or "").lower() == row["to_ieee"].lower():
                                 row["to_device"] = cand.get("friendly_name")
                                 break
                 out.append(row)
