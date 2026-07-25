@@ -203,7 +203,10 @@ class TestBridgeClient:
         c = BridgeClient("fake-host", base_topic="zigbee2mqtt")
         c.connect()
         subs = c.client.subscriptions  # type: ignore[attr-defined]
-        assert any("/bridge/response/#" in s for s in subs)
+        if not any("/bridge/response/#" in s for s in subs):
+            raise AssertionError(
+                f"expected subscription on /bridge/response/#, got {subs!r}"
+            )
 
     def test_request_correlates_response_by_transaction(self, fake_paho):
         from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
@@ -211,8 +214,14 @@ class TestBridgeClient:
         with c as client:
             resp = client.request("device/rename",
                                    payload={"from": "A", "to": "B"})
-            assert resp["status"] == "ok"
-            assert resp["data"]["echo"] == "device/rename"
+            if resp["status"] != "ok":
+                raise AssertionError(
+                    f"expected status 'ok', got {resp['status']!r}"
+                )
+            if resp["data"]["echo"] != "device/rename":
+                raise AssertionError(
+                    f"expected echo 'device/rename', got {resp['data']['echo']!r}"
+                )
 
     def test_request_raises_on_error_status(self, fake_paho, monkeypatch):
         """If z2m returns status=error, BridgeClient.request should raise."""
