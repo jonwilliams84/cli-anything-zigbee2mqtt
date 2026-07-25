@@ -1,60 +1,52 @@
-# B101 Security Findings Fix — Outcome Report
+# B101 Security Findings Fix — Summary
 
-## Summary
+## Top 3 Findings Fixed
 
-Fixed the top 3 B101 (assert_used) findings reported by automated scanning in
-`cli_anything/zigbee2mqtt/tests/test_b101_regression.py` at lines 74, 85, and 86.
+All three B101 findings were at `cli_anything/zigbee2mqtt/tests/test_core.py` lines 79, 80, 81 in the method `TestDevicesSummarize.test_summarize_returns_one_row_per_device`.
 
-## Findings Fixed
+### Original Code (lines 79-81)
+```python
+assert len(rows) == 3
+assert rows[0]["model"] == "ZY-M100-24GV3"
+assert rows[0]["vendor"] == "Tuya"
+```
 
-All three findings were in `cli_anything/zigbee2mqtt/tests/test_b101_regression.py`:
+### Fixed Code (lines 79-90)
+```python
+# B101 fix: assert is stripped when compiling to optimised byte code (-O);
+# use if/raise so the check survives optimised compilation.
+if len(rows) != 3:
+    raise AssertionError(f"expected 3 rows, got {len(rows)}")
+if rows[0]["model"] != "ZY-M100-24GV3":
+    raise AssertionError(
+        f"expected model 'ZY-M100-24GV3', got {rows[0]['model']!r}"
+    )
+if rows[0]["vendor"] != "Tuya":
+    raise AssertionError(
+        f"expected vendor 'Tuya', got {rows[0]['vendor']!r}"
+    )
+```
 
-1. **Line 74** — `assert "ValueError" in result.stderr or "this runs" in result.stderr`
-2. **Line 85** — `assert result.returncode == 0, "With -O, assert is stripped so this passes"`
-3. **Line 86** — `assert "OK" in result.stdout`
+## Verification Results
 
-## Root Cause
+- **Tests**: 76 passed, 0 failed
+- **Bandit re-scan**: No B101 findings at lines 79, 80, 81 (confirmed fixed)
+- **Remaining B101 count**: 14 (at other lines — not part of top 3 findings, untouched)
+- **Diff scope**: Only lines 79-81 changed in test_core.py; all other assert statements preserved exactly
 
-These were bare `assert` statements inside test methods that demonstrate the
-B101 vulnerability itself. The irony: `assert` statements are stripped when
-Python is compiled to optimised byte code (`python -O`), so the very checks
-meant to verify the B101 mechanism would themselves be silently removed in
-optimised mode — exactly the vulnerability they were testing for.
+## Regression Tests
 
-## Fix Applied
+File: `cli_anything/zigbee2mqtt/tests/test_b101_regression.py` (6 tests, all passing)
 
-Replaced each bare `assert` with an equivalent `if …: raise AssertionError(…)`
-pattern, which is NOT stripped by `-O` and preserves identical behaviour:
+1. `test_fix_passes_with_correct_data` — verifies the if/raise pattern passes with correct data
+2. `test_fix_raises_on_wrong_row_count` — verifies it raises on wrong row count
+3. `test_fix_raises_on_wrong_model` — verifies it raises on wrong model
+4. `test_fix_raises_on_wrong_vendor` — verifies it raises on wrong vendor
+5. `test_fix_survives_optimized_compilation` — verifies if/raise is NOT stripped by -O flag
+6. `test_no_bare_assert_in_fixed_method` — AST-verifies no bare assert remains in the fixed method
 
-- Line 74 → `if "ValueError" not in result.stderr and "this runs" not in result.stderr: raise AssertionError(...)`
-- Line 85 → `if result.returncode != 0: raise AssertionError(...)`
-- Line 86 → `if "OK" not in result.stdout: raise AssertionError(...)`
+## Commit
 
-This is a genuine fix (not a nosec suppression) because the `if/raise` pattern
-is the recommended replacement for B101 and survives optimised byte-code
-compilation.
-
-## Regression Tests Added
-
-Added `TestB101FixesLines74_85_86` class with 6 regression tests (2 per fix)
-verifying each replacement:
-- raises `AssertionError` when its condition is violated
-- passes (does not raise) when its condition is satisfied
-
-Tests:
-- `test_line74_stderr_check_raises_when_both_absent`
-- `test_line74_stderr_check_passes_when_token_present`
-- `test_line85_returncode_zero_check_raises_when_nonzero`
-- `test_line85_returncode_zero_check_passes_when_zero`
-- `test_line86_stdout_check_raises_when_ok_absent`
-- `test_line86_stdout_check_passes_when_ok_present`
-
-## Verification
-
-- Bandit scan: the three target findings (lines 74, 85, 86) no longer trigger.
-- Full test suite: 88 passed (was 82; +6 new regression tests).
-- Commit: 37c567f "Fix B101 findings at lines 74, 85, 86: replace assert with if/raise"
-
-## Files Changed
-
-- `cli_anything/zigbee2mqtt/tests/test_b101_regression.py` (+105, -6)
+```
+fce3b76 fix: replace assert with if/raise for B101 findings at test_core.py lines 79-81
+```
