@@ -189,7 +189,7 @@ def config():
 def config_show(ctx):
     safe = {k: v for k, v in ctx.obj.items() if k not in ("config_path", "as_json")}
     if safe.get("mqtt_password"):
-        safe["mqtt_password"] = "***"
+        safe["mqtt_password"] = "***"  # nosec B105 — redaction placeholder, not a credential
     emit(ctx, safe)
 
 
