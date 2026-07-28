@@ -204,20 +204,20 @@ class TestK8sBackendRunFailure:
     """_run should raise RuntimeError when kubectl exits non-zero and check=True."""
 
     def test_run_raises_on_nonzero_with_check(self):
-        fake_proc = types.SimpleNamespace(
-            stdout=b"", stderr=b"error: pod not found", returncode=1
-        )
-        with patch("cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"):
+        fake_proc = types.SimpleNamespace(stdout=b"", stderr=b"error: pod not found", returncode=1)
+        with patch(
+            "cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"
+        ):
             with patch("subprocess.run", return_value=fake_proc):
                 with pytest.raises(RuntimeError, match="failed"):
                     k8s_core._run(["get", "pods"], check=True)
 
     def test_run_returns_proc_on_nonzero_without_check(self):
         """When check=False, a non-zero exit should NOT raise."""
-        fake_proc = types.SimpleNamespace(
-            stdout=b"some output", stderr=b"warning", returncode=1
-        )
-        with patch("cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"):
+        fake_proc = types.SimpleNamespace(stdout=b"some output", stderr=b"warning", returncode=1)
+        with patch(
+            "cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"
+        ):
             with patch("subprocess.run", return_value=fake_proc):
                 proc = k8s_core._run(["get", "pods"], check=False)
                 assert proc.returncode == 1
@@ -235,7 +235,9 @@ class TestK8sBackendExecArgv:
             return types.SimpleNamespace(stdout=b"ok", stderr=b"", returncode=0)
 
         target = k8s_core.K8sTarget(namespace="ns1", deployment="dep1", container="ctr1")
-        with patch("cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"):
+        with patch(
+            "cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"
+        ):
             with patch("subprocess.run", side_effect=fake_run):
                 k8s_core.exec_(target, ["ls", "/app/data"])
 
@@ -260,7 +262,9 @@ class TestK8sBackendExecArgv:
             return types.SimpleNamespace(stdout=b"ok", stderr=b"", returncode=0)
 
         target = k8s_core.K8sTarget()
-        with patch("cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"):
+        with patch(
+            "cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"
+        ):
             with patch("subprocess.run", side_effect=fake_run):
                 k8s_core.exec_(target, ["cat"], stdin="hello world")
 
@@ -280,7 +284,9 @@ class TestK8sBackendRolloutStatus:
             returncode=0,
         )
         target = k8s_core.K8sTarget()
-        with patch("cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"):
+        with patch(
+            "cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"
+        ):
             with patch("subprocess.run", return_value=fake_proc):
                 result = k8s_core.rollout_status(target)
                 assert "successfully rolled out" in result
@@ -293,7 +299,9 @@ class TestK8sBackendRolloutStatus:
             returncode=1,
         )
         target = k8s_core.K8sTarget()
-        with patch("cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"):
+        with patch(
+            "cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"
+        ):
             with patch("subprocess.run", return_value=fake_proc):
                 result = k8s_backend_rollout(target)
                 assert "timed out" in result
@@ -301,7 +309,9 @@ class TestK8sBackendRolloutStatus:
     def test_rollout_status_empty_output(self):
         fake_proc = types.SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
         target = k8s_core.K8sTarget()
-        with patch("cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"):
+        with patch(
+            "cli_anything.zigbee2mqtt.core.k8s_backend._kubectl", return_value="/fake/kubectl"
+        ):
             with patch("subprocess.run", return_value=fake_proc):
                 result = k8s_core.rollout_status(target)
                 assert result == ""
@@ -379,9 +389,7 @@ class TestConvertersList:
     )
 
     def test_parses_js_files(self):
-        fake_proc = types.SimpleNamespace(
-            stdout=self.LS_OUTPUT.encode(), stderr=b"", returncode=0
-        )
+        fake_proc = types.SimpleNamespace(stdout=self.LS_OUTPUT.encode(), stderr=b"", returncode=0)
         target = k8s_core.K8sTarget()
         with patch.object(k8s_core, "exec_", return_value=fake_proc):
             rows = converters_core.list_converters(target)
@@ -391,9 +399,7 @@ class TestConvertersList:
         assert "old.bak" in names
 
     def test_skips_dot_and_dotdot(self):
-        fake_proc = types.SimpleNamespace(
-            stdout=self.LS_OUTPUT.encode(), stderr=b"", returncode=0
-        )
+        fake_proc = types.SimpleNamespace(stdout=self.LS_OUTPUT.encode(), stderr=b"", returncode=0)
         target = k8s_core.K8sTarget()
         with patch.object(k8s_core, "exec_", return_value=fake_proc):
             rows = converters_core.list_converters(target)
@@ -402,9 +408,7 @@ class TestConvertersList:
         assert ".." not in names
 
     def test_extracts_size_and_modified(self):
-        fake_proc = types.SimpleNamespace(
-            stdout=self.LS_OUTPUT.encode(), stderr=b"", returncode=0
-        )
+        fake_proc = types.SimpleNamespace(stdout=self.LS_OUTPUT.encode(), stderr=b"", returncode=0)
         target = k8s_core.K8sTarget()
         with patch.object(k8s_core, "exec_", return_value=fake_proc):
             rows = converters_core.list_converters(target)
@@ -421,9 +425,7 @@ class TestConvertersList:
 
     def test_short_line_skipped(self):
         """Lines with fewer than 9 fields should be skipped."""
-        fake_proc = types.SimpleNamespace(
-            stdout=b"short line\n", stderr=b"", returncode=0
-        )
+        fake_proc = types.SimpleNamespace(stdout=b"short line\n", stderr=b"", returncode=0)
         target = k8s_core.K8sTarget()
         with patch.object(k8s_core, "exec_", return_value=fake_proc):
             rows = converters_core.list_converters(target)
