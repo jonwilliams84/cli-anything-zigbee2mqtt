@@ -202,10 +202,12 @@ class TestListBindings:
         fc = FakeClient()
         fc.set_retained(
             "zigbee2mqtt/bridge/devices",
-            json.dumps([
-                self._device_with_endpoint_binding(),
-                self._device_with_group_binding(),
-            ]),
+            json.dumps(
+                [
+                    self._device_with_endpoint_binding(),
+                    self._device_with_group_binding(),
+                ]
+            ),
         )
         rows = bindings_core.list_bindings(fc)
         # The endpoint binding from sensor_a -> 0xAAAA should resolve
