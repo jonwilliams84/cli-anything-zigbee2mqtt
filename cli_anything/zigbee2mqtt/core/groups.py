@@ -117,3 +117,27 @@ def options(
         },
         timeout=timeout,
     )
+
+
+# ── group membership query ──────────────────────────────────────────────
+
+
+def list_members(client: BridgeClient, group: str, *, timeout: float = 5.0) -> list[dict]:
+    """Return the members of a group by friendly_name or numeric id.
+
+    Reads the retained ``bridge/groups`` topic, finds the matching group,
+    and returns its ``members`` array. Each member dict typically has
+    ``ieee_address`` and ``endpoint`` keys. Returns ``[]`` when the
+    group is not found or has no members.
+    """
+    if not group:
+        raise ValueError("group is required (friendly_name or numeric id)")
+    groups = list_groups(client, timeout=timeout)
+    group_l = str(group).lower()
+    for g in groups:
+        gid = str(g.get("id", "")).lower()
+        gname = str(g.get("friendly_name", "")).lower()
+        if group_l == gid or group_l == gname:
+            members = g.get("members") or []
+            return members if isinstance(members, list) else []
+    return []

@@ -37,7 +37,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 
 | Group | Examples |
 |---|---|
-| `bridge` | `info / state / restart / health / options-get / options-set / watch-events / watch-logging` |
+| `bridge` | `info / state / status / restart / health / options-get / options-set / watch-events / watch-logging` |
 | `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / generate-converter / configure-reporting / bind / unbind / bindings` |
 | `group` | `list / add / remove / rename / add-member / remove-member / remove-all / options` |
 | `ota` | `check / update / schedule` |

@@ -324,3 +324,73 @@ def configure_reporting(
     if endpoint is not None:
         payload["endpoint"] = int(endpoint)
     return client.request("device/configure_reporting", payload=payload, timeout=timeout)
+
+
+# ── enable / disable ───────────────────────────────────────────────────
+
+
+def disable(client: BridgeClient, id_: str, *, timeout: float = 10.0) -> dict:
+    """Disable a device so z2m stops polling and publishing its state.
+
+    Uses z2m's ``device/options`` endpoint with ``{"disabled": true}``.
+    The device stays in the database but is effectively dormant — useful
+    for battery devices that are offline for long periods or for
+    troubleshooting a misbehaving sensor without removing it.
+    """
+    if not id_:
+        raise ValueError("id_ is required")
+    return client.request(
+        "device/options",
+        payload={"id": id_, "options": {"disabled": True}},
+        timeout=timeout,
+    )
+
+
+def enable(client: BridgeClient, id_: str, *, timeout: float = 10.0) -> dict:
+    """Re-enable a previously disabled device.
+
+    Uses z2m's ``device/options`` endpoint with ``{"disabled": false}``.
+    """
+    if not id_:
+        raise ValueError("id_ is required")
+    return client.request(
+        "device/options",
+        payload={"id": id_, "options": {"disabled": False}},
+        timeout=timeout,
+    )
+
+
+# ── last-seen summary ────────────────────────────────────────────────────
+
+
+def last_seen(client: BridgeClient, id_: str, *, timeout: float = 5.0) -> dict:
+    """Return a compact last-seen summary for a single device.
+
+    Looks up the device by IEEE address or friendly_name, then extracts
+    the ``last_seen`` timestamp and computes minutes since. Returns
+    ``{}`` when the device is not found.
+    """
+    dev = show(client, id_)
+    if not dev:
+        return {}
+    import datetime as _dt
+
+    last = dev.get("last_seen")
+    result: dict = {
+        "friendly_name": dev.get("friendly_name"),
+        "ieee_address": dev.get("ieee_address"),
+        "last_seen": last,
+        "type": dev.get("type"),
+    }
+    if not last:
+        result["minutes_since_seen"] = None
+        return result
+    try:
+        last_dt = _dt.datetime.fromisoformat(last.replace("Z", "+00:00"))
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=_dt.timezone.utc)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        result["minutes_since_seen"] = round((now - last_dt).total_seconds() / 60.0, 1)
+    except (ValueError, AttributeError):
+        result["minutes_since_seen"] = None
+    return result
