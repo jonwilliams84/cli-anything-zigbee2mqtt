@@ -4,6 +4,7 @@ The MQTT client is exercised against a fake transport so no broker is needed.
 """
 
 from __future__ import annotations
+from unittest.mock import patch
 
 import json
 import threading
@@ -534,3 +535,453 @@ class TestB101FixRegressionTimeAttributeUsed:
         with pytest.raises(AssertionError, match="time module still used"):
             if bad:
                 raise AssertionError(f"time module still used: {bad}")
+
+
+# ── bridge helpers ─────────────────────────────────────────────────────────────
+
+
+class FakeBridgeClientForBridge:
+    base_topic = "zigbee2mqtt"
+
+    def __init__(self):
+        self._retained: dict[str, str] = {}
+        self._responses: dict[str, dict] = {}
+
+    def set_retained(self, topic: str, payload: str) -> None:
+        self._retained[topic] = payload
+
+    def set_response(self, path: str, response: dict) -> None:
+        self._responses[path] = response
+
+    def collect_retained(self, topic: str, *, timeout: float = 5.0) -> str | None:
+        return self._retained.get(topic)
+
+    def request(self, path: str, payload=None, *, timeout: float = 15.0) -> dict:
+        return self._responses.get(path, {})
+
+    def subscribe(self, filter_: str, callback) -> None:
+        pass
+
+
+class TestBridgeInfo:
+    def test_info_returns_parsed_json(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_retained(
+            "zigbee2mqtt/bridge/info",
+            '{"version":"1.33.0","commit":"abc123"}',
+        )
+        result = bridge_core.info(client)
+        assert result["version"] == "1.33.0"
+
+    def test_info_empty_returns_empty_dict(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        result = bridge_core.info(client)
+        assert result == {}
+
+    def test_info_malformed_json_returns_raw(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_retained("zigbee2mqtt/bridge/info", "not json {{{")
+        result = bridge_core.info(client)
+        assert result.get("raw") == "not json {{{"
+
+
+class TestBridgeState:
+    def test_state_plain_string(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_retained("zigbee2mqtt/bridge/state", "offline")
+        result = bridge_core.state(client)
+        assert result == "offline"
+
+    def test_state_json_object(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_retained(
+            "zigbee2mqtt/bridge/state", '{"state":"online","note":"running"}'
+        )
+        result = bridge_core.state(client)
+        assert result == "online"
+
+    def test_state_none_returns_empty_string(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        result = bridge_core.state(client)
+        assert result == ""
+
+    def test_state_malformed_json_falls_back(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_retained("zigbee2mqtt/bridge/state", "  not json {{{")
+        result = bridge_core.state(client)
+        # Falls back to the raw string
+        assert result == "not json {{{"
+
+
+class TestBridgeRestart:
+    def test_restart_returns_response(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_response("restart", {"message": "restarting", "status": "ok"})
+        result = bridge_core.restart(client)
+        assert result["status"] == "ok"
+
+
+class TestBridgeHealthCheck:
+    def test_health_check_returns_response(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_response("health_check", {"status": "ok"})
+        result = bridge_core.health_check(client)
+        assert result["status"] == "ok"
+
+
+class TestBridgeOptions:
+    def test_options_get_returns_response(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_response("options", {"options": {"permit_join": True}})
+        result = bridge_core.options_get(client)
+        assert "options" in result
+
+    def test_options_set_passes_payload(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        client.set_response("options", {"status": "ok"})
+        result = bridge_core.options_set(client, {"permit_join": False})
+        assert result["status"] == "ok"
+
+
+class TestBridgeWatchLogging:
+    def test_watch_logging_returns_collected(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+        import json
+        import time
+
+        client = FakeBridgeClientForBridge()
+        captured_cb = None
+
+        def capture_subscribe(topic, cb):
+            nonlocal captured_cb
+            captured_cb = cb
+
+        client.subscribe = capture_subscribe
+
+        # Track sleep calls; deliver messages on the 1st call and raise
+        # KeyboardInterrupt on the 2nd to break out of the loop deterministically
+        sleep_calls = [0]
+
+        def controlled_sleep(duration):
+            sleep_calls[0] += 1
+            if sleep_calls[0] == 1:
+                # First iteration: deliver messages
+                captured_cb("zigbee2mqtt/bridge/logging", json.dumps({"msg": "info1"}))
+                captured_cb("zigbee2mqtt/bridge/logging", json.dumps({"msg": "info2"}))
+            elif sleep_calls[0] == 2:
+                # Second iteration: exit the loop
+                raise KeyboardInterrupt()
+            else:
+                time.sleep(duration)
+
+        with patch.object(time, "sleep", side_effect=controlled_sleep):
+            result = bridge_core.watch_logging(client, duration=10.0)  # long duration
+
+        assert len(result) == 2
+        assert result[0]["msg"] == "info1"
+        assert result[1]["msg"] == "info2"
+
+    def test_watch_logging_malformed_payload_in_collected(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeBridgeClientForBridge()
+        captured_cb = None
+
+        def capture_subscribe(topic, cb):
+            nonlocal captured_cb
+            captured_cb = cb
+
+        client.subscribe = capture_subscribe
+
+        sleep_calls = [0]
+
+        def controlled_sleep(duration):
+            sleep_calls[0] += 1
+            if sleep_calls[0] == 1:
+                captured_cb("zigbee2mqtt/bridge/logging", "not json {{{")
+            elif sleep_calls[0] == 2:
+                raise KeyboardInterrupt()
+
+        import time
+        with patch.object(time, "sleep", side_effect=controlled_sleep):
+            result = bridge_core.watch_logging(client, duration=10.0)
+
+        assert len(result) == 1
+        assert result[0]["raw"] == "not json {{{"
+
+    def test_watch_logging_callback_error_isolation(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+        import time
+
+        client = FakeBridgeClientForBridge()
+        captured_cb = None
+
+        def capture_subscribe(topic, cb):
+            nonlocal captured_cb
+            captured_cb = cb
+
+        client.subscribe = capture_subscribe
+
+        def bad_cb(data):
+            raise RuntimeError("boom")
+
+        sleep_calls = [0]
+
+        def controlled_sleep(duration):
+            sleep_calls[0] += 1
+            if sleep_calls[0] == 1:
+                captured_cb("zigbee2mqtt/bridge/logging", '{"msg":"ok"}')
+            elif sleep_calls[0] == 2:
+                raise KeyboardInterrupt()
+
+        with patch.object(time, "sleep", side_effect=controlled_sleep):
+            result = bridge_core.watch_logging(client, duration=10.0, callback=bad_cb)
+
+        # The loop continues despite the callback error — message is still collected
+        assert len(result) == 1
+        assert result[0]["msg"] == "ok"
+
+
+class TestBridgeWatchEvents:
+    def test_watch_events_returns_collected(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+        import json
+        import time
+
+        client = FakeBridgeClientForBridge()
+        captured_cb = None
+
+        def capture_subscribe(topic, cb):
+            nonlocal captured_cb
+            captured_cb = cb
+
+        client.subscribe = capture_subscribe
+
+        sleep_calls = [0]
+
+        def controlled_sleep(duration):
+            sleep_calls[0] += 1
+            if sleep_calls[0] == 1:
+                captured_cb(
+                    "zigbee2mqtt/bridge/event",
+                    json.dumps({"type": "device_joined", "data": {}}),
+                )
+            elif sleep_calls[0] == 2:
+                raise KeyboardInterrupt()
+
+        with patch.object(time, "sleep", side_effect=controlled_sleep):
+            result = bridge_core.watch_events(client, duration=10.0)
+
+        assert len(result) == 1
+        assert result[0]["type"] == "device_joined"
+
+
+# ── k8s_backend ───────────────────────────────────────────────────────────────
+
+
+class FakeSubprocessResult:
+    def __init__(self, returncode=0, stdout=b"", stderr=b""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class TestK8sBackendHelpers:
+    def test_kubectl_raises_when_not_found(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        with patch("shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="kubectl not found"):
+                k8s._kubectl()
+
+    def test_kubectl_returns_path_when_found(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            result = k8s._kubectl()
+            assert result == "/usr/bin/kubectl"
+
+    def test_run_raises_on_nonzero_by_default(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch("subprocess.run", return_value=FakeSubprocessResult(1, b"", b"err")):
+                with pytest.raises(RuntimeError, match="kubectl.*failed.*exit 1"):
+                    k8s._run(["kubectl", "version"])
+
+    def test_run_returns_proc_on_nonzero_when_check_false(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch("subprocess.run", return_value=FakeSubprocessResult(1, b"out", b"")):
+                result = k8s._run(["kubectl", "version"], check=False)
+                assert result.stdout == b"out"
+
+    def test_exec_adds_stdin_i_flag(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        tgt = k8s.K8sTarget(
+            namespace="z2m",
+            deployment="z2m",
+            container="z2m",
+            data_path="/app/data",
+        )
+
+        captured_args = []
+
+        def fake_run(args, **kwargs):
+            captured_args.append(args)
+            return FakeSubprocessResult(0, b"ok")
+
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch("subprocess.run", fake_run):
+                k8s.exec_(tgt, ["ls", "/app/data"], stdin="hello", check=True)
+
+        cmd = captured_args[0]
+        assert "-i" in cmd
+        assert "kubectl" in cmd[0]
+
+    def test_exec_without_stdin_no_i_flag(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        tgt = k8s.K8sTarget(
+            namespace="z2m",
+            deployment="z2m",
+            container="z2m",
+            data_path="/app/data",
+        )
+        captured_args = []
+
+        def fake_run(args, **kwargs):
+            captured_args.append(args)
+            return FakeSubprocessResult(0, b"ok")
+
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch("subprocess.run", fake_run):
+                k8s.exec_(tgt, ["ls", "/app/data"], check=True)
+
+        cmd = captured_args[0]
+        assert "-i" not in cmd
+
+
+class TestK8sBackendRestart:
+    def test_restart_calls_kubectl_rollout_restart(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        tgt = k8s.K8sTarget(
+            namespace="z2m",
+            deployment="z2m",
+            container="z2m",
+            data_path="/app/data",
+        )
+        captured_args = []
+
+        def fake_run(args, **kwargs):
+            captured_args.append(args)
+            return FakeSubprocessResult(0, b"", b"")
+
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch("subprocess.run", side_effect=fake_run):
+                k8s.restart(tgt)
+
+        assert len(captured_args) == 1
+        assert "-n" in captured_args[0]
+        assert "rollout" in captured_args[0]
+        assert "restart" in captured_args[0]
+        assert "deployment/z2m" in captured_args[0]
+
+
+class TestK8sBackendRolloutStatus:
+    def test_rollout_status_returns_output(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        tgt = k8s.K8sTarget(
+            namespace="z2m",
+            deployment="z2m",
+            container="z2m",
+            data_path="/app/data",
+        )
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch(
+                "subprocess.run",
+                return_value=FakeSubprocessResult(0, b"Waiting for rollout...\ndone"),
+            ):
+                result = k8s.rollout_status(tgt, timeout="60s")
+                assert "Waiting" in result or "done" in result
+
+    def test_rollout_status_includes_stderr(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        tgt = k8s.K8sTarget(
+            namespace="z2m",
+            deployment="z2m",
+            container="z2m",
+            data_path="/app/data",
+        )
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch(
+                "subprocess.run",
+                return_value=FakeSubprocessResult(0, b"out", b"err msg"),
+            ):
+                result = k8s.rollout_status(tgt)
+                assert "err msg" in result
+
+
+class TestK8sBackendConverters:
+    def test_list_external_converters(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        tgt = k8s.K8sTarget(
+            namespace="z2m",
+            deployment="z2m",
+            container="z2m",
+            data_path="/app/data",
+        )
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch(
+                "subprocess.run",
+                return_value=FakeSubprocessResult(
+                    0, b"conv1.js\nconv2.js\n", b""
+                ),
+            ):
+                result = k8s.list_external_converters(tgt)
+                assert result == ["conv1.js", "conv2.js"]
+
+    def test_read_external_converter(self):
+        from cli_anything.zigbee2mqtt.core import k8s_backend as k8s
+
+        tgt = k8s.K8sTarget(
+            namespace="z2m",
+            deployment="z2m",
+            container="z2m",
+            data_path="/app/data",
+        )
+        with patch("shutil.which", return_value="/usr/bin/kubectl"):
+            with patch(
+                "subprocess.run",
+                return_value=FakeSubprocessResult(0, b"// converter code", b""),
+            ):
+                result = k8s.read_external_converter(tgt, "myconv.js")
+                assert result == "// converter code"
