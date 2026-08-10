@@ -119,9 +119,41 @@ def watch_events(
         pass
     return collected
 
+
 def status(client: BridgeClient, *, timeout: float = 5.0) -> dict:
     """Combined view of bridge info and current state."""
     return {
         "info": info(client, timeout=timeout),
         "state": state(client, timeout=timeout),
     }
+
+
+# ── log level get / set ──────────────────────────────────────────────────
+
+
+def get_log_level(client: BridgeClient, *, timeout: float = 5.0) -> dict:
+    """Return the current z2m log level from bridge/info.
+
+    z2m publishes ``advanced.log_level`` in the retained ``bridge/info``
+    payload. This is a convenience wrapper that extracts just that field.
+    """
+    info_data = info(client, timeout=timeout)
+    advanced = info_data.get("advanced") or {}
+    return {"log_level": advanced.get("log_level")}
+
+
+def set_log_level(client: BridgeClient, level: str, *, timeout: float = 10.0) -> dict:
+    """Set the z2m log level at runtime (no restart needed).
+
+    Valid levels: ``debug``, ``info``, ``warn``, ``error``, ``silent``.
+    Uses the ``bridge/options`` request endpoint with
+    ``{"advanced": {"log_level": "<level>"}}``.
+    """
+    valid = {"debug", "info", "warn", "error", "silent"}
+    if level not in valid:
+        raise ValueError(f"level must be one of {sorted(valid)}, got {level!r}")
+    return options_set(
+        client,
+        {"advanced": {"log_level": level}},
+        timeout=timeout,
+    )

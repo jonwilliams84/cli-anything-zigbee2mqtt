@@ -255,6 +255,7 @@ def bridge_status_cmd(ctx):
     with make_client(ctx) as c:
         emit(ctx, bridge_core.status(c))
 
+
 @bridge.command("health")
 @click.pass_context
 def bridge_health_cmd(ctx):
@@ -314,6 +315,22 @@ def bridge_watch_logging(ctx, duration):
         )
 
 
+@bridge.command("log-level")
+@click.argument("level", required=False)
+@click.pass_context
+def bridge_log_level(ctx, level):
+    """Get or set the z2m log level.
+
+    Without LEVEL: prints the current log level.
+    With LEVEL: sets it (debug, info, warn, error, silent).
+    """
+    with make_client(ctx) as c:
+        if level:
+            emit(ctx, bridge_core.set_log_level(c, level))
+        else:
+            emit(ctx, bridge_core.get_log_level(c))
+
+
 # ──────────────────────────────────────────────────────── devices
 
 
@@ -335,7 +352,6 @@ def device_list(ctx, full):
     emit(ctx, devices_core.summarize(rows))
 
 
-
 @device.command("ieee")
 @click.pass_context
 @click.argument("ident")
@@ -346,7 +362,12 @@ def device_ieee_cmd(ctx, ident):
 
         if not dev:
             _abort(f"Device {ident} not found")
-        emit(ctx, {"ieee_address": dev.get("ieee_address"), "friendly_name": dev.get("friendly_name")})
+        emit(
+            ctx,
+            {"ieee_address": dev.get("ieee_address"), "friendly_name": dev.get("friendly_name")},
+        )
+
+
 @device.command("show")
 @click.argument("ident")
 @click.pass_context
@@ -691,6 +712,33 @@ def device_bindings(ctx, ident):
         emit(ctx, bindings_core.list_bindings(c, device_ident=ident))
 
 
+@device.command("disable")
+@click.argument("id_or_name")
+@click.pass_context
+def device_disable(ctx, id_or_name):
+    """Disable a device (stops polling and publishing)."""
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.disable(c, id_or_name))
+
+
+@device.command("enable")
+@click.argument("id_or_name")
+@click.pass_context
+def device_enable(ctx, id_or_name):
+    """Re-enable a previously disabled device."""
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.enable(c, id_or_name))
+
+
+@device.command("last-seen")
+@click.argument("id_or_name")
+@click.pass_context
+def device_last_seen(ctx, id_or_name):
+    """Show when a device was last seen and minutes since."""
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.last_seen(c, id_or_name))
+
+
 # ──────────────────────────────────────────────────────── groups
 
 
@@ -705,6 +753,15 @@ def group_list(ctx):
     """List all Zigbee groups."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.list_groups(c))
+
+
+@group.command("members")
+@click.argument("group_name")
+@click.pass_context
+def group_members(ctx, group_name):
+    """List the members of a group."""
+    with make_client(ctx) as c:
+        emit(ctx, groups_core.list_members(c, group_name))
 
 
 @group.command("add")

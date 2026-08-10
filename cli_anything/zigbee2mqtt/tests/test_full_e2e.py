@@ -110,7 +110,9 @@ class TestConfigCommands:
         assert result.exit_code == 0, result.output
         # Password should be redacted or absent (None values are safe)
         output_lower = result.output.lower()
-        assert "mqtt_password" not in output_lower or "***" in output_lower or "none" in output_lower
+        assert (
+            "mqtt_password" not in output_lower or "***" in output_lower or "none" in output_lower
+        )
 
     @patch(
         "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
@@ -156,9 +158,7 @@ class TestBridgeCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "--json", "bridge", "info"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "--json", "bridge", "info"])
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["version"] == "1.33.0"
@@ -189,9 +189,7 @@ class TestBridgeCommands:
     def test_bridge_state_json_object(self, fake_client):
         """bridge/state can be a JSON object like {"state":"online"}."""
         client = FakeBridgeClient()
-        client.set_retained(
-            "zigbee2mqtt/bridge/state", json.dumps({"state": "online"})
-        )
+        client.set_retained("zigbee2mqtt/bridge/state", json.dumps({"state": "online"}))
         with patch(
             "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
             lambda ctx: client,
@@ -227,9 +225,7 @@ class TestBridgeCommands:
 
     def test_bridge_options_get(self, fake_client):
         client = FakeBridgeClient()
-        client.set_response(
-            "options", {"options": {"permit_join": True}}
-        )
+        client.set_response("options", {"options": {"permit_join": True}})
         with patch(
             "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
             lambda ctx: client,
@@ -248,10 +244,7 @@ class TestBridgeCommands:
             r = _runner()
             result = r.invoke(
                 cli,
-                [
-                    "--mqtt-host", "x", "bridge", "options-set",
-                    '{"permit_join":false}'
-                ],
+                ["--mqtt-host", "x", "bridge", "options-set", '{"permit_join":false}'],
             )
             assert result.exit_code == 0, result.output
 
@@ -259,10 +252,7 @@ class TestBridgeCommands:
         r = _runner()
         result = r.invoke(
             cli,
-            [
-                "--mqtt-host", "x", "bridge", "options-set",
-                "not-valid-json"
-            ],
+            ["--mqtt-host", "x", "bridge", "options-set", "not-valid-json"],
         )
         assert result.exit_code != 0
         assert "JSON" in result.output or "decode" in result.output.lower()
@@ -327,9 +317,7 @@ class TestDeviceCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "device", "list", "--full"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "device", "list", "--full"])
             assert result.exit_code == 0
 
     def test_device_show_not_found(self, fake_client):
@@ -343,9 +331,7 @@ class TestDeviceCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "device", "show", "nonexistent"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "device", "show", "nonexistent"])
             assert result.exit_code != 0
             assert "not found" in result.output.lower() or "no device" in result.output.lower()
 
@@ -353,22 +339,22 @@ class TestDeviceCommands:
         client = FakeBridgeClient()
         client.set_retained(
             "zigbee2mqtt/bridge/devices",
-            json.dumps([
-                {
-                    "friendly_name": "lamp1",
-                    "ieee_address": "0x1234",
-                    "definition": {"model": "Lamp"},
-                }
-            ]),
+            json.dumps(
+                [
+                    {
+                        "friendly_name": "lamp1",
+                        "ieee_address": "0x1234",
+                        "definition": {"model": "Lamp"},
+                    }
+                ]
+            ),
         )
         with patch(
             "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "--json", "device", "show", "lamp1"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "--json", "device", "show", "lamp1"])
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["friendly_name"] == "lamp1"
@@ -384,8 +370,12 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "device", "remove",
-                    "ghost_device", "--force",
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "remove",
+                    "ghost_device",
+                    "--force",
                     "--block",
                 ],
                 input="y\n",
@@ -417,8 +407,13 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "device", "rename",
-                    "old_name", "new_name", "--no-ha-rename",
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "rename",
+                    "old_name",
+                    "new_name",
+                    "--no-ha-rename",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -431,9 +426,7 @@ class TestDeviceCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "device", "interview", "sensor1"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "device", "interview", "sensor1"])
             assert result.exit_code == 0, result.output
 
     def test_device_configure(self, fake_client):
@@ -444,9 +437,7 @@ class TestDeviceCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "device", "configure", "sensor1"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "device", "configure", "sensor1"])
             assert result.exit_code == 0, result.output
 
     def test_device_options(self, fake_client):
@@ -460,8 +451,12 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "device", "options",
-                    "sensor1", '{"debounce":0.5}',
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "options",
+                    "sensor1",
+                    '{"debounce":0.5}',
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -484,8 +479,13 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "device", "set",
-                    "lamp1", "state=ON", "brightness=200",
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "set",
+                    "lamp1",
+                    "state=ON",
+                    "brightness=200",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -499,8 +499,7 @@ class TestDeviceCommands:
             r = _runner()
             result = r.invoke(
                 cli,
-                ["--mqtt-host", "x", "device", "get", "lamp1",
-                 "state", "brightness"],
+                ["--mqtt-host", "x", "device", "get", "lamp1", "state", "brightness"],
             )
             assert result.exit_code == 0, result.output
 
@@ -514,8 +513,13 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "device", "watch",
-                    "lamp1", "--duration", "0.1",
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "watch",
+                    "lamp1",
+                    "--duration",
+                    "0.1",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -531,9 +535,7 @@ class TestDeviceCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "--json", "device", "state", "lamp1"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "--json", "device", "state", "lamp1"])
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["state"] == "ON"
@@ -545,9 +547,7 @@ class TestDeviceCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "device", "state", "ghost"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "device", "state", "ghost"])
             # empty state → graceful, no crash
             assert result.exit_code == 0, result.output
 
@@ -565,8 +565,15 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "--json", "device", "stale",
-                    "--threshold", "60", "--no-routers", "--no-end-devices",
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "stale",
+                    "--threshold",
+                    "60",
+                    "--no-routers",
+                    "--no-end-devices",
                 ],
             )
             assert result.exit_code == 0
@@ -589,8 +596,14 @@ class TestDeviceCommands:
                 result = r.invoke(
                     cli,
                     [
-                        "--mqtt-host", "x", "device", "generate-converter",
-                        "sensor1", "-o", "out.js", "--overwrite",
+                        "--mqtt-host",
+                        "x",
+                        "device",
+                        "generate-converter",
+                        "sensor1",
+                        "-o",
+                        "out.js",
+                        "--overwrite",
                     ],
                 )
                 assert result.exit_code == 0, result.output
@@ -611,8 +624,14 @@ class TestDeviceCommands:
                 result = r.invoke(
                     cli,
                     [
-                        "--mqtt-host", "x", "device", "generate-converter",
-                        "sensor1", "-o", "out.js", "--overwrite",
+                        "--mqtt-host",
+                        "x",
+                        "device",
+                        "generate-converter",
+                        "sensor1",
+                        "-o",
+                        "out.js",
+                        "--overwrite",
                     ],
                 )
                 assert result.exit_code == 0, result.output
@@ -633,8 +652,13 @@ class TestDeviceCommands:
                 result = r.invoke(
                     cli,
                     [
-                        "--mqtt-host", "x", "device", "generate-converter",
-                        "sensor1", "-o", "out.js",
+                        "--mqtt-host",
+                        "x",
+                        "device",
+                        "generate-converter",
+                        "sensor1",
+                        "-o",
+                        "out.js",
                     ],
                 )
                 assert result.exit_code != 0
@@ -654,8 +678,14 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "device", "bind",
-                    "switch1", "lamp1", "--cluster", "genOnOff",
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "bind",
+                    "switch1",
+                    "lamp1",
+                    "--cluster",
+                    "genOnOff",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -685,8 +715,14 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "device", "unbind",
-                    "switch1", "lamp1", "--cluster", "genOnOff",
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "unbind",
+                    "switch1",
+                    "lamp1",
+                    "--cluster",
+                    "genOnOff",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -702,9 +738,7 @@ class TestDeviceCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "--json", "device", "bindings"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "--json", "device", "bindings"])
             assert result.exit_code == 0
 
     def test_device_bindings_with_ident(self, fake_client):
@@ -721,7 +755,11 @@ class TestDeviceCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "--json", "device", "bindings",
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "bindings",
                     "switch1",
                 ],
             )
@@ -781,8 +819,13 @@ class TestGroupCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "group", "add",
-                    "kitchen", "--id", "5",
+                    "--mqtt-host",
+                    "x",
+                    "group",
+                    "add",
+                    "kitchen",
+                    "--id",
+                    "5",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -827,8 +870,12 @@ class TestGroupCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "group", "rename",
-                    "old_group", "new_group",
+                    "--mqtt-host",
+                    "x",
+                    "group",
+                    "rename",
+                    "old_group",
+                    "new_group",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -844,8 +891,12 @@ class TestGroupCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "group", "add-member",
-                    "kitchen", "lamp1",
+                    "--mqtt-host",
+                    "x",
+                    "group",
+                    "add-member",
+                    "kitchen",
+                    "lamp1",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -861,8 +912,12 @@ class TestGroupCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "group", "remove-member",
-                    "kitchen", "lamp1",
+                    "--mqtt-host",
+                    "x",
+                    "group",
+                    "remove-member",
+                    "kitchen",
+                    "lamp1",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -877,7 +932,7 @@ class TestGroupCommands:
             r = _runner()
             result = r.invoke(
                 cli,
-                [ "--mqtt-host", "x", "group", "remove-all", "kitchen", "--yes" ],
+                ["--mqtt-host", "x", "group", "remove-all", "kitchen", "--yes"],
             )
             assert result.exit_code == 0, result.output
 
@@ -892,8 +947,12 @@ class TestGroupCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "group", "options",
-                    "kitchen", '{"transition":1.5}',
+                    "--mqtt-host",
+                    "x",
+                    "group",
+                    "options",
+                    "kitchen",
+                    '{"transition":1.5}',
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -915,9 +974,7 @@ class TestOtaCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "ota", "check", "sensor1"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "ota", "check", "sensor1"])
             assert result.exit_code == 0, result.output
 
     def test_ota_update(self, fake_client):
@@ -928,9 +985,7 @@ class TestOtaCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, [ "--mqtt-host", "x", "ota", "update", "sensor1", "--yes" ]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "ota", "update", "sensor1", "--yes"])
             assert result.exit_code == 0, result.output
 
     def test_ota_schedule(self, fake_client):
@@ -941,9 +996,7 @@ class TestOtaCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "ota", "schedule", "sensor1"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "ota", "schedule", "sensor1"])
             assert result.exit_code == 0, result.output
 
 
@@ -994,8 +1047,15 @@ class TestNetworkCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "network", "permit-join", "on",
-                    "--time", "60", "--device", "router_lamp",
+                    "--mqtt-host",
+                    "x",
+                    "network",
+                    "permit-join",
+                    "on",
+                    "--time",
+                    "60",
+                    "--device",
+                    "router_lamp",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -1025,8 +1085,12 @@ class TestNetworkCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "network", "map",
-                    "--type", "graphviz",
+                    "--mqtt-host",
+                    "x",
+                    "network",
+                    "map",
+                    "--type",
+                    "graphviz",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -1042,8 +1106,12 @@ class TestNetworkCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "network", "map",
-                    "--type", "plantuml",
+                    "--mqtt-host",
+                    "x",
+                    "network",
+                    "map",
+                    "--type",
+                    "plantuml",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -1064,9 +1132,7 @@ class TestNetworkCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "network", "touchlink-scan"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "network", "touchlink-scan"])
             assert result.exit_code == 0, result.output
 
     def test_network_touchlink_identify(self, fake_client):
@@ -1080,8 +1146,12 @@ class TestNetworkCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "network", "touchlink-identify",
-                    "0x1234567890abcdef", "11",
+                    "--mqtt-host",
+                    "x",
+                    "network",
+                    "touchlink-identify",
+                    "0x1234567890abcdef",
+                    "11",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -1097,8 +1167,15 @@ class TestNetworkCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "network", "touchlink-reset",
-                    "--ieee", "0x1234567890abcdef", "--channel", "11", "--yes",
+                    "--mqtt-host",
+                    "x",
+                    "network",
+                    "touchlink-reset",
+                    "--ieee",
+                    "0x1234567890abcdef",
+                    "--channel",
+                    "11",
+                    "--yes",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -1111,9 +1188,7 @@ class TestNetworkCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "network", "coordinator-check"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "network", "coordinator-check"])
             assert result.exit_code == 0, result.output
 
     def test_network_backup(self, fake_client):
@@ -1124,9 +1199,7 @@ class TestNetworkCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "network", "backup"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "network", "backup"])
             assert result.exit_code == 0, result.output
 
 
@@ -1147,9 +1220,16 @@ class TestConverterCommands:
                 result = r.invoke(
                     cli,
                     [
-                        "--k8s-namespace", "z2m", "--k8s-deployment", "z2m",
-                        "--k8s-container", "z2m", "--k8s-data-path", "/app/data",
-                        "converter", "list",
+                        "--k8s-namespace",
+                        "z2m",
+                        "--k8s-deployment",
+                        "z2m",
+                        "--k8s-container",
+                        "z2m",
+                        "--k8s-data-path",
+                        "/app/data",
+                        "converter",
+                        "list",
                     ],
                 )
                 assert result.exit_code == 0, result.output
@@ -1168,9 +1248,17 @@ class TestConverterCommands:
                 result = r.invoke(
                     cli,
                     [
-                        "--k8s-namespace", "z2m", "--k8s-deployment", "z2m",
-                        "--k8s-container", "z2m", "--k8s-data-path", "/app/data",
-                        "converter", "show", "myconv.js",
+                        "--k8s-namespace",
+                        "z2m",
+                        "--k8s-deployment",
+                        "z2m",
+                        "--k8s-container",
+                        "z2m",
+                        "--k8s-data-path",
+                        "/app/data",
+                        "converter",
+                        "show",
+                        "myconv.js",
                     ],
                 )
                 assert result.exit_code == 0, result.output
@@ -1191,9 +1279,18 @@ class TestConverterCommands:
                     result = r.invoke(
                         cli,
                         [
-                            "--k8s-namespace", "z2m", "--k8s-deployment", "z2m",
-                            "--k8s-container", "z2m", "--k8s-data-path", "/app/data",
-                            "converter", "add", "myconv", "myconv.js",
+                            "--k8s-namespace",
+                            "z2m",
+                            "--k8s-deployment",
+                            "z2m",
+                            "--k8s-container",
+                            "z2m",
+                            "--k8s-data-path",
+                            "/app/data",
+                            "converter",
+                            "add",
+                            "myconv",
+                            "myconv.js",
                         ],
                     )
                     assert result.exit_code == 0, result.output
@@ -1212,9 +1309,17 @@ class TestConverterCommands:
                 result = r.invoke(
                     cli,
                     [
-                        "--k8s-namespace", "z2m", "--k8s-deployment", "z2m",
-                        "--k8s-container", "z2m", "--k8s-data-path", "/app/data",
-                        "converter", "remove", "myconv.js",
+                        "--k8s-namespace",
+                        "z2m",
+                        "--k8s-deployment",
+                        "z2m",
+                        "--k8s-container",
+                        "z2m",
+                        "--k8s-data-path",
+                        "/app/data",
+                        "converter",
+                        "remove",
+                        "myconv.js",
                     ],
                     input="y\n",
                 )
@@ -1238,9 +1343,7 @@ class TestExtensionCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "extension", "list"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "extension", "list"])
             assert result.exit_code == 0, result.output
 
     def test_extension_show(self, fake_client):
@@ -1254,9 +1357,7 @@ class TestExtensionCommands:
             lambda ctx: client,
         ):
             r = _runner()
-            result = r.invoke(
-                cli, ["--mqtt-host", "x", "extension", "show", "ext1"]
-            )
+            result = r.invoke(cli, ["--mqtt-host", "x", "extension", "show", "ext1"])
             assert result.exit_code == 0, result.output
 
     def test_extension_save(self, fake_client):
@@ -1309,7 +1410,10 @@ class TestInstallCodeCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "install-code", "add",
+                    "--mqtt-host",
+                    "x",
+                    "install-code",
+                    "add",
                     "1234-567890-ABCDEF",
                 ],
             )
@@ -1326,8 +1430,12 @@ class TestInstallCodeCommands:
             result = r.invoke(
                 cli,
                 [
-                    "--mqtt-host", "x", "install-code", "remove",
-                    "1234-567890-ABCDEF", "--yes",
+                    "--mqtt-host",
+                    "x",
+                    "install-code",
+                    "remove",
+                    "1234-567890-ABCDEF",
+                    "--yes",
                 ],
             )
             assert result.exit_code == 0, result.output
@@ -1339,26 +1447,27 @@ class TestInstallCodeCommands:
 def test_bridge_status(mock_state, mock_info, mock_make_client):
     mock_info.return_value = {"version": "1.35.0"}
     mock_state.return_value = "online"
-    
+
     # Mock the client context manager
     mock_client = MagicMock()
     mock_make_client.return_value.__enter__.return_value = mock_client
-    
+
     runner = _runner()
     result = runner.invoke(cli, ["--mqtt-host", "x", "bridge", "status"])
     assert result.exit_code == 0, result.output
     assert "version" in result.output
     assert "online" in result.output
 
+
 @patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client")
 @patch("cli_anything.zigbee2mqtt.core.devices.show")
 def test_device_ieee(mock_show, mock_make_client):
     mock_show.return_value = {"friendly_name": "Lamp", "ieee_address": "0x1234"}
-    
+
     # Mock the client context manager
     mock_client = MagicMock()
     mock_make_client.return_value.__enter__.return_value = mock_client
-    
+
     runner = _runner()
     result = runner.invoke(cli, ["--mqtt-host", "x", "device", "ieee", "Lamp"])
     assert result.exit_code == 0, result.output

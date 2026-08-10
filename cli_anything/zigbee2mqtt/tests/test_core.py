@@ -604,9 +604,7 @@ class TestBridgeState:
         from cli_anything.zigbee2mqtt.core import bridge as bridge_core
 
         client = FakeBridgeClientForBridge()
-        client.set_retained(
-            "zigbee2mqtt/bridge/state", '{"state":"online","note":"running"}'
-        )
+        client.set_retained("zigbee2mqtt/bridge/state", '{"state":"online","note":"running"}')
         result = bridge_core.state(client)
         assert result == "online"
 
@@ -725,6 +723,7 @@ class TestBridgeWatchLogging:
                 raise KeyboardInterrupt()
 
         import time
+
         with patch.object(time, "sleep", side_effect=controlled_sleep):
             result = bridge_core.watch_logging(client, duration=10.0)
 
@@ -962,9 +961,7 @@ class TestK8sBackendConverters:
         with patch("shutil.which", return_value="/usr/bin/kubectl"):
             with patch(
                 "subprocess.run",
-                return_value=FakeSubprocessResult(
-                    0, b"conv1.js\nconv2.js\n", b""
-                ),
+                return_value=FakeSubprocessResult(0, b"conv1.js\nconv2.js\n", b""),
             ):
                 result = k8s.list_external_converters(tgt)
                 assert result == ["conv1.js", "conv2.js"]
