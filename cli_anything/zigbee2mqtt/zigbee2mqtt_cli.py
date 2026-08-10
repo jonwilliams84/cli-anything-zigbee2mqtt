@@ -187,6 +187,7 @@ def config():
 @config.command("show")
 @click.pass_context
 def config_show(ctx):
+    """Show the current connection profile."""
     safe = {k: v for k, v in ctx.obj.items() if k not in ("config_path", "as_json")}
     if safe.get("mqtt_password"):
         safe["mqtt_password"] = "***"  # nosec B105 — redaction placeholder, not a credential
@@ -196,6 +197,7 @@ def config_show(ctx):
 @config.command("save")
 @click.pass_context
 def config_save(ctx):
+    """Save the current connection profile to disk."""
     safe = {k: v for k, v in ctx.obj.items() if k not in ("config_path", "as_json")}
     out = project.save_config(safe, ctx.obj.get("config_path"))
     emit(ctx, {"saved": str(out)})
@@ -246,9 +248,17 @@ def bridge_restart_cmd(ctx, via_kubectl):
             _abort(str(exc))
 
 
+@bridge.command("status")
+@click.pass_context
+def bridge_status_cmd(ctx):
+    """Combined bridge info and state."""
+    with make_client(ctx) as c:
+        emit(ctx, bridge_core.status(c))
+
 @bridge.command("health")
 @click.pass_context
 def bridge_health_cmd(ctx):
+    """Check the bridge health status."""
     with make_client(ctx) as c:
         emit(ctx, bridge_core.health_check(c))
 
@@ -256,6 +266,7 @@ def bridge_health_cmd(ctx):
 @bridge.command("options-get")
 @click.pass_context
 def bridge_options_get(ctx):
+    """Get the current bridge options."""
     with make_client(ctx) as c:
         emit(ctx, bridge_core.options_get(c))
 
@@ -315,6 +326,7 @@ def device():
 @click.option("--full", is_flag=True, help="Include the full raw device records")
 @click.pass_context
 def device_list(ctx, full):
+    """List all paired devices."""
     with make_client(ctx) as c:
         rows = devices_core.list_devices(c)
     if full:
@@ -323,6 +335,18 @@ def device_list(ctx, full):
     emit(ctx, devices_core.summarize(rows))
 
 
+
+@device.command("ieee")
+@click.pass_context
+@click.argument("ident")
+def device_ieee_cmd(ctx, ident):
+    """Get the IEEE address for a friendly name or vice versa."""
+    with make_client(ctx) as c:
+        dev = devices_core.show(c, ident)
+
+        if not dev:
+            _abort(f"Device {ident} not found")
+        emit(ctx, {"ieee_address": dev.get("ieee_address"), "friendly_name": dev.get("friendly_name")})
 @device.command("show")
 @click.argument("ident")
 @click.pass_context
@@ -343,6 +367,7 @@ def device_show(ctx, ident):
 )
 @click.pass_context
 def device_rename(ctx, from_name, to_name, no_ha_rename):
+    """Rename a device by its friendly name or IEEE address."""
     with make_client(ctx) as c:
         try:
             emit(
@@ -364,6 +389,7 @@ def device_rename(ctx, from_name, to_name, no_ha_rename):
 @click.confirmation_option(prompt="Really remove this device from the network?")
 @click.pass_context
 def device_remove(ctx, id_or_name, force, block):
+    """Remove a device from the bridge."""
     with make_client(ctx) as c:
         emit(ctx, devices_core.remove(c, id_or_name, force=force, block=block))
 
@@ -372,6 +398,7 @@ def device_remove(ctx, id_or_name, force, block):
 @click.argument("id_or_name")
 @click.pass_context
 def device_configure(ctx, id_or_name):
+    """Configure a device's endpoints."""
     with make_client(ctx) as c:
         emit(ctx, devices_core.configure(c, id_or_name))
 
@@ -380,6 +407,7 @@ def device_configure(ctx, id_or_name):
 @click.argument("id_or_name")
 @click.pass_context
 def device_interview(ctx, id_or_name):
+    """Force a device interview."""
     with make_client(ctx) as c:
         emit(ctx, devices_core.interview(c, id_or_name))
 
@@ -442,6 +470,7 @@ def device_get(ctx, friendly_name, keys):
 @click.option("--duration", default=10.0, type=float)
 @click.pass_context
 def device_watch(ctx, friendly_name, duration):
+    """Watch events for a specific device."""
     with make_client(ctx) as c:
         emit(ctx, devices_core.watch_device(c, friendly_name, duration=duration))
 
@@ -673,6 +702,7 @@ def group():
 @group.command("list")
 @click.pass_context
 def group_list(ctx):
+    """List all Zigbee groups."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.list_groups(c))
 
@@ -684,6 +714,7 @@ def group_list(ctx):
 )
 @click.pass_context
 def group_add(ctx, friendly_name, id_):
+    """Create a new Zigbee group."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.add(c, friendly_name, id_=id_))
 
@@ -694,6 +725,7 @@ def group_add(ctx, friendly_name, id_):
 @click.confirmation_option(prompt="Remove this group?")
 @click.pass_context
 def group_remove(ctx, id_or_name, force):
+    """Remove a Zigbee group."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.remove(c, id_or_name, force=force))
 
@@ -703,6 +735,7 @@ def group_remove(ctx, id_or_name, force):
 @click.argument("to_name")
 @click.pass_context
 def group_rename(ctx, from_name, to_name):
+    """Rename a Zigbee group."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.rename(c, from_name, to_name))
 
@@ -712,6 +745,7 @@ def group_rename(ctx, from_name, to_name):
 @click.argument("device_name")
 @click.pass_context
 def group_add_member(ctx, group_name, device_name):
+    """Add a device to a group."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.add_member(c, group_name, device_name))
 
@@ -722,6 +756,7 @@ def group_add_member(ctx, group_name, device_name):
 @click.option("--skip-disable-reporting", is_flag=True)
 @click.pass_context
 def group_remove_member(ctx, group_name, device_name, skip_disable_reporting):
+    """Remove a device from a group."""
     with make_client(ctx) as c:
         emit(
             ctx,
@@ -739,6 +774,7 @@ def group_remove_member(ctx, group_name, device_name, skip_disable_reporting):
 @click.confirmation_option(prompt="Remove ALL members from the group?")
 @click.pass_context
 def group_remove_all(ctx, group_name):
+    """Remove all devices from a group."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.remove_all_members(c, group_name))
 
@@ -774,6 +810,7 @@ def ota():
 @click.argument("id_or_name")
 @click.pass_context
 def ota_check(ctx, id_or_name):
+    """Check for available OTA updates for a device."""
     with make_client(ctx) as c:
         emit(ctx, ota_core.check(c, id_or_name))
 
@@ -788,6 +825,7 @@ def ota_check(ctx, id_or_name):
 )
 @click.pass_context
 def ota_update(ctx, id_or_name, timeout):
+    """Start an OTA update for a device."""
     with make_client(ctx) as c:
         emit(ctx, ota_core.update(c, id_or_name, timeout=timeout))
 
@@ -796,6 +834,7 @@ def ota_update(ctx, id_or_name, timeout):
 @click.argument("id_or_name")
 @click.pass_context
 def ota_schedule(ctx, id_or_name):
+    """Schedule an OTA update for a device."""
     with make_client(ctx) as c:
         emit(ctx, ota_core.schedule(c, id_or_name))
 
@@ -816,6 +855,7 @@ def network_grp():
 @click.option("--device", default=None, help="Open via a specific router (friendly name).")
 @click.pass_context
 def network_permit_join(ctx, state, time_secs, device):
+    """Enable/disable permit-join for the network."""
     with make_client(ctx) as c:
         emit(
             ctx,
@@ -841,6 +881,7 @@ def network_map_cmd(ctx, type_, no_routes):
 @network_grp.command("touchlink-scan")
 @click.pass_context
 def network_touchlink_scan(ctx):
+    """Scan for devices via Touchlink."""
     with make_client(ctx) as c:
         emit(ctx, admin.touchlink_scan(c))
 
@@ -850,6 +891,7 @@ def network_touchlink_scan(ctx):
 @click.argument("channel", type=int)
 @click.pass_context
 def network_touchlink_identify(ctx, ieee, channel):
+    """Identify a device via Touchlink."""
     with make_client(ctx) as c:
         emit(ctx, admin.touchlink_identify(c, ieee, channel))
 
@@ -860,6 +902,7 @@ def network_touchlink_identify(ctx, ieee, channel):
 @click.confirmation_option(prompt="Factory-reset via touchlink?")
 @click.pass_context
 def network_touchlink_reset(ctx, ieee, channel):
+    """Reset a device via Touchlink."""
     with make_client(ctx) as c:
         emit(ctx, admin.touchlink_factory_reset(c, ieee=ieee, channel=channel))
 
@@ -867,6 +910,7 @@ def network_touchlink_reset(ctx, ieee, channel):
 @network_grp.command("coordinator-check")
 @click.pass_context
 def network_coordinator_check(ctx):
+    """Check the coordinator's status."""
     with make_client(ctx) as c:
         emit(ctx, admin.coordinator_check(c))
 
@@ -874,6 +918,7 @@ def network_coordinator_check(ctx):
 @network_grp.command("backup")
 @click.pass_context
 def network_backup(ctx):
+    """Backup the coordinator's network state."""
     with make_client(ctx) as c:
         emit(ctx, admin.backup(c))
 
@@ -889,6 +934,7 @@ def converter():
 @converter.command("list")
 @click.pass_context
 def converter_list(ctx):
+    """List all external converters."""
     target = make_k8s_target(ctx)
     emit(ctx, converters_core.list_converters(target))
 
@@ -897,6 +943,7 @@ def converter_list(ctx):
 @click.argument("name")
 @click.pass_context
 def converter_show(ctx, name):
+    """Show the content of an external converter."""
     target = make_k8s_target(ctx)
     click.echo(converters_core.show(target, name))
 
@@ -926,6 +973,7 @@ def converter_add(ctx, name, local_path, no_backup):
 @click.confirmation_option(prompt="Remove this external converter file?")
 @click.pass_context
 def converter_remove(ctx, name, no_backup):
+    """Remove an external converter."""
     target = make_k8s_target(ctx)
     emit(ctx, converters_core.remove(target, name, backup=not no_backup))
 

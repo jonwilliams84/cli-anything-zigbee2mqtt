@@ -9,7 +9,6 @@ the key error path.
 from __future__ import annotations
 
 import json
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1332,3 +1331,42 @@ class TestInstallCodeCommands:
                 ],
             )
             assert result.exit_code == 0, result.output
+
+
+@patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client")
+@patch("cli_anything.zigbee2mqtt.core.bridge.info")
+@patch("cli_anything.zigbee2mqtt.core.bridge.state")
+def test_bridge_status(mock_state, mock_info, mock_make_client):
+    mock_info.return_value = {"version": "1.35.0"}
+    mock_state.return_value = "online"
+    
+    # Mock the client context manager
+    mock_client = MagicMock()
+    mock_make_client.return_value.__enter__.return_value = mock_client
+    
+    runner = _runner()
+    result = runner.invoke(cli, ["--mqtt-host", "x", "bridge", "status"])
+    assert result.exit_code == 0, result.output
+    assert "version" in result.output
+    assert "online" in result.output
+
+@patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client")
+@patch("cli_anything.zigbee2mqtt.core.devices.show")
+def test_device_ieee(mock_show, mock_make_client):
+    mock_show.return_value = {"friendly_name": "Lamp", "ieee_address": "0x1234"}
+    
+    # Mock the client context manager
+    mock_client = MagicMock()
+    mock_make_client.return_value.__enter__.return_value = mock_client
+    
+    runner = _runner()
+    result = runner.invoke(cli, ["--mqtt-host", "x", "device", "ieee", "Lamp"])
+    assert result.exit_code == 0, result.output
+    assert "0x1234" in result.output
+    assert "Lamp" in result.output
+
+    # Test not found
+    mock_show.return_value = None
+    result = runner.invoke(cli, ["--mqtt-host", "x", "device", "ieee", "Unknown"])
+    assert result.exit_code != 0, result.output
+    assert "not found" in result.output

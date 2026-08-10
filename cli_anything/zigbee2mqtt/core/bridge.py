@@ -118,3 +118,10 @@ def watch_events(
     except KeyboardInterrupt:
         pass
     return collected
+
+def status(client: BridgeClient, *, timeout: float = 5.0) -> dict:
+    """Combined view of bridge info and current state."""
+    return {
+        "info": info(client, timeout=timeout),
+        "state": state(client, timeout=timeout),
+    }
