@@ -1909,3 +1909,51 @@ class TestSceneWorkflows:
             "zigbee2mqtt/lamp1/set",
             {"state": "ON", "brightness": 200, "color": {"x": 0.3, "y": 0.3}},
         )
+
+
+class TestScenePreflightValidation:
+    """Bad scene arguments must fail before any MQTT connection is attempted."""
+
+    @staticmethod
+    def _exploding_client(ctx):
+        raise AssertionError("make_client must not be called for invalid scene args")
+
+    def _invoke(self, argv):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            self._exploding_client,
+        ):
+            return _runner().invoke(cli, ["--mqtt-host", "x", *argv])
+
+    def test_store_bad_id_never_connects(self):
+        result = self._invoke(["scene", "store", "kitchen", "999"])
+        assert result.exit_code != 0
+        assert "scene_id must be 0-255" in result.output
+
+    def test_recall_bad_id_never_connects(self):
+        result = self._invoke(["scene", "recall", "kitchen", "256"])
+        assert result.exit_code != 0
+        assert "scene_id must be 0-255" in result.output
+
+    def test_remove_bad_id_never_connects(self):
+        result = self._invoke(["scene", "remove", "kitchen", "300"])
+        assert result.exit_code != 0
+
+    def test_add_bad_id_never_connects(self):
+        result = self._invoke(["scene", "add", "kitchen", "700"])
+        assert result.exit_code != 0
+
+    def test_rename_blank_name_never_connects(self):
+        result = self._invoke(["scene", "rename", "kitchen", "2", "  "])
+        assert result.exit_code != 0
+        assert "name is required" in result.output
+
+    def test_store_blank_name_never_connects(self):
+        result = self._invoke(["scene", "store", "kitchen", "2", "--name", " "])
+        assert result.exit_code != 0
+        assert "name is required" in result.output
+
+    def test_remove_all_blank_target_never_connects(self):
+        result = self._invoke(["scene", "remove-all", "   ", "--yes"])
+        assert result.exit_code != 0
+        assert "target is required" in result.output

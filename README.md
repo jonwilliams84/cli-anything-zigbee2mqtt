@@ -173,7 +173,7 @@ filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-553 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
+560 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
 a fake MQTT transport, every mutator in bindings / install_code / extensions /
 groups / scenes, the read-side helpers in devices.py (read_state / find_stale /
 generate_external_definition / configure_reporting), and multi-command workflows

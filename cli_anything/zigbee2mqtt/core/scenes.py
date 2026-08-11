@@ -43,13 +43,18 @@ MIN_SCENE_ID = 0
 MAX_SCENE_ID = 255
 
 
-def _check_target(target: str) -> str:
+# The check_* helpers are public on purpose: the CLI calls them to reject bad
+# arguments *before* opening an MQTT connection, so `scene store x 999` fails
+# with a clear message even when no broker is reachable.
+
+
+def check_target(target: str) -> str:
     if not target or not str(target).strip():
         raise ValueError("target is required (device or group friendly_name)")
     return str(target).strip()
 
 
-def _check_scene_id(scene_id: int) -> int:
+def check_scene_id(scene_id: int) -> int:
     try:
         sid = int(scene_id)
     except (TypeError, ValueError):
@@ -59,7 +64,7 @@ def _check_scene_id(scene_id: int) -> int:
     return sid
 
 
-def _check_name(name: str) -> str:
+def check_name(name: str) -> str:
     if not name or not str(name).strip():
         raise ValueError("name is required")
     return str(name).strip()
@@ -71,7 +76,7 @@ def set_topic(client: BridgeClient, target: str, *, endpoint: Optional[int | str
     Scene ids live per endpoint, so a multi-gang device needs
     ``<base>/<name>/<endpoint>/set`` to address the right one.
     """
-    target = _check_target(target)
+    target = check_target(target)
     if endpoint is None or endpoint == "":
         return f"{client.base_topic}/{target}/set"
     return f"{client.base_topic}/{target}/{endpoint}/set"
@@ -86,7 +91,7 @@ def _publish(
 ) -> dict:
     topic = set_topic(client, target, endpoint=endpoint)
     rc = client.publish(topic, payload)
-    return {"target": _check_target(target), "topic": topic, "published": payload, "rc": rc}
+    return {"target": check_target(target), "topic": topic, "published": payload, "rc": rc}
 
 
 # ── mutations ───────────────────────────────────────────────────────────
@@ -106,10 +111,10 @@ def store(
     then ``store`` snapshots that state into the device's scene table.
     *name* is optional metadata z2m keeps so ``list_scenes`` can label it.
     """
-    sid = _check_scene_id(scene_id)
+    sid = check_scene_id(scene_id)
     body: dict[str, Any] = {"ID": sid}
     if name is not None:
-        body["name"] = _check_name(name)
+        body["name"] = check_name(name)
     return _publish(client, target, {"scene_store": body}, endpoint=endpoint)
 
 
@@ -121,7 +126,7 @@ def recall(
     endpoint: Optional[int | str] = None,
 ) -> dict:
     """Apply stored scene *scene_id* on the target."""
-    sid = _check_scene_id(scene_id)
+    sid = check_scene_id(scene_id)
     return _publish(client, target, {"scene_recall": sid}, endpoint=endpoint)
 
 
@@ -147,10 +152,10 @@ def add(
     just the common ones. ``transition`` is the fade time in seconds used
     when the scene is later recalled.
     """
-    sid = _check_scene_id(scene_id)
+    sid = check_scene_id(scene_id)
     body: dict[str, Any] = {"ID": sid}
     if name is not None:
-        body["name"] = _check_name(name)
+        body["name"] = check_name(name)
     if transition is not None:
         if float(transition) < 0:
             raise ValueError("transition must be >= 0")
@@ -183,7 +188,7 @@ def remove(
     endpoint: Optional[int | str] = None,
 ) -> dict:
     """Delete a single scene from the target's scene table."""
-    sid = _check_scene_id(scene_id)
+    sid = check_scene_id(scene_id)
     return _publish(client, target, {"scene_remove": sid}, endpoint=endpoint)
 
 
@@ -209,11 +214,11 @@ def rename(
     endpoint: Optional[int | str] = None,
 ) -> dict:
     """Rename a stored scene (metadata only — the light values are untouched)."""
-    sid = _check_scene_id(scene_id)
+    sid = check_scene_id(scene_id)
     return _publish(
         client,
         target,
-        {"scene_rename": {"ID": sid, "name": _check_name(name)}},
+        {"scene_rename": {"ID": sid, "name": check_name(name)}},
         endpoint=endpoint,
     )
 
@@ -247,7 +252,7 @@ def list_scenes(client: BridgeClient, target: str, *, timeout: float = 3.0) -> l
 
     Returns ``[]`` when the target has no scenes or is unknown.
     """
-    target = _check_target(target)
+    target = check_target(target)
     raw = client.collect_retained(f"{client.base_topic}/{target}", timeout=timeout)
     if raw:
         try:

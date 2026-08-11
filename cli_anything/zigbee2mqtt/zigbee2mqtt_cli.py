@@ -150,6 +150,23 @@ def _parse_json_obj(raw: str, label: str) -> dict:
     return parsed
 
 
+def _preflight_scene(target, scene_id=None, name=None) -> None:
+    """Validate scene arguments BEFORE opening an MQTT connection.
+
+    Scene ids are 8-bit and names must be non-empty; failing here means
+    `scene store x 999` reports the real problem instead of a broker
+    connection error.
+    """
+    try:
+        scenes_core.check_target(target)
+        if scene_id is not None:
+            scenes_core.check_scene_id(scene_id)
+        if name is not None:
+            scenes_core.check_name(name)
+    except ValueError as exc:
+        _abort(str(exc))
+
+
 # ──────────────────────────────────────────────────────── root
 
 
@@ -965,6 +982,7 @@ def scene_store(ctx, target, scene_id, name, endpoint):
     Set the lights first (`group set kitchen state=ON brightness=80`), then
     store — the device captures whatever it is doing right now.
     """
+    _preflight_scene(target, scene_id, name)
     try:
         with make_client(ctx) as c:
             emit(ctx, scenes_core.store(c, target, scene_id, name=name, endpoint=endpoint))
@@ -979,6 +997,7 @@ def scene_store(ctx, target, scene_id, name, endpoint):
 @click.pass_context
 def scene_recall(ctx, target, scene_id, endpoint):
     """Apply stored scene SCENE_ID on the target."""
+    _preflight_scene(target, scene_id)
     try:
         with make_client(ctx) as c:
             emit(ctx, scenes_core.recall(c, target, scene_id, endpoint=endpoint))
@@ -1006,6 +1025,7 @@ def scene_add(
     ctx, target, scene_id, name, transition, state, brightness, color_temp, color, extra, endpoint
 ):
     """Write scene SCENE_ID explicitly, without setting the lights first."""
+    _preflight_scene(target, scene_id, name)
     color_obj = _parse_json_obj(color, "--color") if color else None
     extra_obj = _parse_json_obj(extra, "--extra") if extra else None
     try:
@@ -1038,6 +1058,7 @@ def scene_add(
 @click.pass_context
 def scene_rename(ctx, target, scene_id, name, endpoint):
     """Rename stored scene SCENE_ID (metadata only, light values untouched)."""
+    _preflight_scene(target, scene_id, name)
     try:
         with make_client(ctx) as c:
             emit(ctx, scenes_core.rename(c, target, scene_id, name, endpoint=endpoint))
@@ -1052,6 +1073,7 @@ def scene_rename(ctx, target, scene_id, name, endpoint):
 @click.pass_context
 def scene_remove(ctx, target, scene_id, endpoint):
     """Delete one scene from the target's scene table."""
+    _preflight_scene(target, scene_id)
     try:
         with make_client(ctx) as c:
             emit(ctx, scenes_core.remove(c, target, scene_id, endpoint=endpoint))
@@ -1066,6 +1088,7 @@ def scene_remove(ctx, target, scene_id, endpoint):
 @click.pass_context
 def scene_remove_all(ctx, target, endpoint):
     """Delete every scene stored on the target."""
+    _preflight_scene(target)
     try:
         with make_client(ctx) as c:
             emit(ctx, scenes_core.remove_all(c, target, endpoint=endpoint))
