@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, direct bind/unbind + bindings inspection, last-seen staleness sweeps, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, direct bind/unbind + bindings inspection, last-seen staleness sweeps, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -16,6 +16,8 @@ agent can reliably tell whether an operation succeeded.
 - Triggering OTA firmware checks / updates.
 - Opening the network (`permit_join`) to add a new device or close it.
 - Reading the current device or group inventory in JSON form.
+- Driving a whole room at once (`group set`) instead of looping over members.
+- Capturing or replaying a lighting scene (`scene store` / `scene recall`).
 - Generating a network map (raw / graphviz / plantuml).
 - Pushing or removing an external converter file (e.g. to override an exposes
   block in `zigbee-herdsman-converters` without forking it).
@@ -39,7 +41,8 @@ Two external deps:
 |---|---|
 | `bridge` | `bridge info`, `bridge state`, `bridge restart`, `bridge restart --via-kubectl`, `bridge health`, `bridge options-get`, `bridge options-set '{"advanced":{"log_level":"info"}}'`, `bridge watch-events --duration 30`, `bridge watch-logging --duration 10` |
 | `device` | `device list`, `device list --full`, `device show <name>`, `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]` |
-| `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'` |
+| `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained) |
+| `scene` | `scene list <target>`, `scene store <target> <id> --name Chill`, `scene recall <target> <id>`, `scene add <target> <id> --state ON --brightness 200 --color-temp 370 --transition 2`, `scene rename <target> <id> <name>`, `scene remove <target> <id>`, `scene remove-all <target> --yes` — TARGET is a device or group friendly_name; add `--endpoint <n>` for multi-gang devices |
 | `ota` | `ota check <name>`, `ota update <name>`, `ota schedule <name>` |
 | `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup` |
 | `install-code` | `install-code add <QR-text>`, `install-code remove <QR-text>` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
@@ -63,6 +66,20 @@ min. While waiting, monitor progress in another shell with
 **Removing a device is destructive** — defaults prompt for confirmation. For
 unattended use, set `--force` (network removal skipped) and/or `--block`
 (prevent rejoining). Always combine with `--yes` to skip the prompt.
+
+**Group commands are a single groupcast.** `group set kitchen state=ON` changes
+every member at once (visually atomic, one radio transmission). Never loop
+`device set` over members — that is N unicasts and the lights step raggedly.
+
+**Scene commands are Zigbee cluster commands, not bridge requests.** They publish
+to `<base>/<target>/set` and have NO `bridge/response`, so the exit code only
+proves the publish succeeded. To verify, read it back: `scene list <target>`
+(from the retained state payload) or `group state <target>` after a recall.
+
+**`scene store` snapshots live state; `scene add` writes values directly.** Store
+means "set the lights how you want them, then capture" — so `group set` first,
+then `scene store`. Use `scene add` when scripting unattended (no need to disturb
+the current light state). Scene ids are 0-255 and per endpoint.
 
 **Permit-join auto-closes.** `permit-join on --time 60` opens for 60s then
 closes. Don't leave it open indefinitely.
@@ -155,6 +172,28 @@ cli-anything-zigbee2mqtt device state sensor_balcony
 cli-anything-zigbee2mqtt device configure-reporting balcony-temp \
   --cluster msTemperatureMeasurement --attribute measuredValue \
   --min 300 --max 1800 --change 0.5
+```
+
+### Build a room scene and recall it
+
+```bash
+# One group per room; the group is addressable exactly like a device.
+cli-anything-zigbee2mqtt group add kitchen-lights
+cli-anything-zigbee2mqtt group add-member kitchen-lights light_kitchen_1
+cli-anything-zigbee2mqtt group add-member kitchen-lights light_kitchen_2
+
+# Dial the room in, then snapshot it as scene 1 on every member.
+cli-anything-zigbee2mqtt group set kitchen-lights state=ON brightness=60 color_temp=450
+cli-anything-zigbee2mqtt scene store kitchen-lights 1 --name Chill
+
+# Verify it landed, then replay it (one groupcast).
+cli-anything-zigbee2mqtt --json scene list kitchen-lights
+cli-anything-zigbee2mqtt scene recall kitchen-lights 1
+cli-anything-zigbee2mqtt --json group state kitchen-lights
+
+# Scripted alternative — no need to disturb the lights first.
+cli-anything-zigbee2mqtt scene add kitchen-lights 2 --name Dinner \
+  --state ON --brightness 200 --color-temp 370 --transition 2
 ```
 
 ### Onboard a join-code-protected device (Bosch, some Aqara)
