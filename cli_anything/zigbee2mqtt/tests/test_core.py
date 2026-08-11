@@ -982,3 +982,538 @@ class TestK8sBackendConverters:
             ):
                 result = k8s.read_external_converter(tgt, "myconv.js")
                 assert result == "// converter code"
+
+
+# ── scenes + group state control ───────────────────────────────────────────────
+
+
+class RecordingClient:
+    """Fake BridgeClient that records publishes and serves retained payloads.
+
+    Scene commands and group set/get are fire-and-forget publishes (Zigbee
+    scene commands have no bridge/response counterpart), so the assertion
+    surface is "what topic + payload went onto the wire" — which is exactly
+    what this records.
+    """
+
+    def __init__(self, base_topic: str = "zigbee2mqtt"):
+        self.base_topic = base_topic
+        self.published: list[tuple[str, object]] = []
+        self._retained: dict[str, str] = {}
+        self.rc = 0
+
+    def set_retained(self, topic: str, payload: str) -> None:
+        self._retained[topic] = payload
+
+    def collect_retained(self, topic: str, *, timeout: float = 5.0):
+        return self._retained.get(topic)
+
+    def publish(self, topic: str, payload, *, retain: bool = False, qos: int = 0) -> int:
+        self.published.append((topic, payload))
+        return self.rc
+
+    @property
+    def last(self) -> tuple[str, object]:
+        return self.published[-1]
+
+
+class TestSceneTopics:
+    def test_set_topic_without_endpoint(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        assert scenes.set_topic(c, "Kitchen") == "zigbee2mqtt/Kitchen/set"
+
+    def test_set_topic_with_endpoint(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        assert scenes.set_topic(c, "Kitchen", endpoint=2) == "zigbee2mqtt/Kitchen/2/set"
+
+    def test_set_topic_honours_custom_base_topic(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient(base_topic="z2m")
+        assert scenes.set_topic(c, "Kitchen") == "z2m/Kitchen/set"
+
+    def test_empty_endpoint_string_is_ignored(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        assert scenes.set_topic(c, "Kitchen", endpoint="") == "zigbee2mqtt/Kitchen/set"
+
+    def test_blank_target_rejected(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="target is required"):
+            scenes.set_topic(c, "   ")
+
+
+class TestSceneStore:
+    def test_store_publishes_scene_store(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        result = scenes.store(c, "Kitchen", 3)
+        topic, payload = c.last
+        assert topic == "zigbee2mqtt/Kitchen/set"
+        assert payload == {"scene_store": {"ID": 3}}
+        assert result["rc"] == 0
+        assert result["target"] == "Kitchen"
+
+    def test_store_with_name(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.store(c, "Kitchen", 3, name="Chill")
+        assert c.last[1] == {"scene_store": {"ID": 3, "name": "Chill"}}
+
+    def test_store_endpoint_scoped(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.store(c, "Switch", 1, endpoint="left")
+        assert c.last[0] == "zigbee2mqtt/Switch/left/set"
+
+    def test_store_rejects_out_of_range_id(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="0-255"):
+            scenes.store(c, "Kitchen", 256)
+        with pytest.raises(ValueError, match="0-255"):
+            scenes.store(c, "Kitchen", -1)
+        assert c.published == []
+
+    def test_store_rejects_non_integer_id(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="must be an integer"):
+            scenes.store(c, "Kitchen", "abc")
+
+    def test_store_rejects_blank_name(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="name is required"):
+            scenes.store(c, "Kitchen", 1, name="  ")
+
+    def test_scene_id_zero_is_valid(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.store(c, "Kitchen", 0)
+        assert c.last[1] == {"scene_store": {"ID": 0}}
+
+    def test_scene_id_255_is_valid(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.store(c, "Kitchen", scenes.MAX_SCENE_ID)
+        assert c.last[1] == {"scene_store": {"ID": 255}}
+
+
+class TestSceneRecallRemoveRename:
+    def test_recall(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.recall(c, "Kitchen", 4)
+        assert c.last == ("zigbee2mqtt/Kitchen/set", {"scene_recall": 4})
+
+    def test_remove(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.remove(c, "Kitchen", 4)
+        assert c.last == ("zigbee2mqtt/Kitchen/set", {"scene_remove": 4})
+
+    def test_remove_all_uses_empty_value(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.remove_all(c, "Kitchen")
+        assert c.last == ("zigbee2mqtt/Kitchen/set", {"scene_remove_all": ""})
+
+    def test_remove_all_endpoint(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.remove_all(c, "Switch", endpoint=2)
+        assert c.last[0] == "zigbee2mqtt/Switch/2/set"
+
+    def test_rename(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.rename(c, "Kitchen", 4, "Movie")
+        assert c.last[1] == {"scene_rename": {"ID": 4, "name": "Movie"}}
+
+    def test_rename_requires_name(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="name is required"):
+            scenes.rename(c, "Kitchen", 4, "")
+
+    def test_recall_validates_id_before_publishing(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError):
+            scenes.recall(c, "Kitchen", 900)
+        assert c.published == []
+
+
+class TestSceneAdd:
+    def test_add_minimal(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.add(c, "Kitchen", 7)
+        assert c.last[1] == {"scene_add": {"ID": 7}}
+
+    def test_add_full_payload(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.add(
+            c,
+            "Kitchen",
+            7,
+            name="Dinner",
+            transition=1.5,
+            state="on",
+            brightness=120,
+            color_temp=370,
+            color={"x": 0.4, "y": 0.4},
+            extra={"color_mode": "xy"},
+        )
+        body = c.last[1]["scene_add"]
+        assert body["ID"] == 7
+        assert body["name"] == "Dinner"
+        assert body["transition"] == 1.5
+        assert body["state"] == "ON"  # upper-cased for z2m
+        assert body["brightness"] == 120
+        assert body["color_temp"] == 370
+        assert body["color"] == {"x": 0.4, "y": 0.4}
+        assert body["color_mode"] == "xy"
+
+    def test_add_rejects_bad_brightness(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="brightness must be 0-254"):
+            scenes.add(c, "Kitchen", 1, brightness=300)
+
+    def test_add_rejects_negative_transition(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="transition must be >= 0"):
+            scenes.add(c, "Kitchen", 1, transition=-2)
+
+    def test_add_rejects_non_dict_color(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="color must be a JSON object"):
+            scenes.add(c, "Kitchen", 1, color="red")
+
+    def test_add_rejects_non_dict_extra(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="extra must be a dict"):
+            scenes.add(c, "Kitchen", 1, extra=["nope"])
+
+    def test_add_ignores_empty_extra(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        scenes.add(c, "Kitchen", 1, extra={})
+        assert c.last[1] == {"scene_add": {"ID": 1}}
+
+
+class TestSceneList:
+    def test_list_from_retained_state(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained(
+            "zigbee2mqtt/Kitchen",
+            json.dumps({"state": "ON", "scenes": [{"id": 2, "name": "B"}, {"id": 1, "name": "A"}]}),
+        )
+        rows = scenes.list_scenes(c, "Kitchen")
+        assert [r["id"] for r in rows] == [1, 2]
+        assert rows[0]["name"] == "A"
+
+    def test_list_accepts_uppercase_id_key(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/Kitchen", json.dumps({"scenes": [{"ID": 5, "name": "X"}]}))
+        assert scenes.list_scenes(c, "Kitchen") == [{"id": 5, "name": "X"}]
+
+    def test_list_accepts_bare_int_ids(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/Kitchen", json.dumps({"scenes": [3, 1]}))
+        assert scenes.list_scenes(c, "Kitchen") == [
+            {"id": 1, "name": None},
+            {"id": 3, "name": None},
+        ]
+
+    def test_list_falls_back_to_bridge_groups(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/groups",
+            json.dumps(
+                [
+                    {"id": 1, "friendly_name": "Other", "scenes": []},
+                    {"id": 2, "friendly_name": "Kitchen", "scenes": [{"id": 9, "name": "Late"}]},
+                ]
+            ),
+        )
+        assert scenes.list_scenes(c, "kitchen") == [{"id": 9, "name": "Late"}]
+
+    def test_list_fallback_matches_numeric_group_id(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/groups",
+            json.dumps([{"id": 2, "friendly_name": "Kitchen", "scenes": [{"id": 4}]}]),
+        )
+        assert scenes.list_scenes(c, "2") == [{"id": 4, "name": None}]
+
+    def test_list_empty_when_nothing_retained(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        assert scenes.list_scenes(c, "Kitchen") == []
+
+    def test_list_state_without_scenes_falls_through(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/Kitchen", json.dumps({"state": "ON"}))
+        assert scenes.list_scenes(c, "Kitchen") == []
+
+    def test_list_tolerates_malformed_state_json(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/Kitchen", "not json {{")
+        assert scenes.list_scenes(c, "Kitchen") == []
+
+    def test_list_tolerates_malformed_groups_json(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", "}}not json")
+        assert scenes.list_scenes(c, "Kitchen") == []
+
+    def test_list_tolerates_non_list_groups(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", json.dumps({"unexpected": True}))
+        assert scenes.list_scenes(c, "Kitchen") == []
+
+    def test_list_skips_non_dict_group_entries(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", json.dumps(["junk", {"friendly_name": "K"}]))
+        assert scenes.list_scenes(c, "K") == []
+
+    def test_list_scenes_non_list_value(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/Kitchen", json.dumps({"scenes": "weird"}))
+        assert scenes.list_scenes(c, "Kitchen") == []
+
+    def test_list_skips_unrecognised_scene_rows(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/Kitchen", json.dumps({"scenes": [{"id": 1}, "junk", None]}))
+        assert scenes.list_scenes(c, "Kitchen") == [{"id": 1, "name": None}]
+
+    def test_list_empty_when_no_group_matches(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/groups",
+            json.dumps([{"id": 1, "friendly_name": "Hallway", "scenes": [{"id": 1}]}]),
+        )
+        assert scenes.list_scenes(c, "Kitchen") == []
+
+    def test_list_requires_target(self):
+        from cli_anything.zigbee2mqtt.core import scenes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="target is required"):
+            scenes.list_scenes(c, "")
+
+
+class TestGroupListMembers:
+    """Sibling read-side helper of the new group state commands."""
+
+    INVENTORY = json.dumps(
+        [
+            {
+                "id": 1,
+                "friendly_name": "kitchen",
+                "members": [{"ieee_address": "0xaa", "endpoint": 1}],
+            },
+            {"id": 2, "friendly_name": "hallway"},
+        ]
+    )
+
+    def test_members_by_friendly_name(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", self.INVENTORY)
+        assert groups_core.list_members(c, "kitchen") == [{"ieee_address": "0xaa", "endpoint": 1}]
+
+    def test_members_by_numeric_id(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", self.INVENTORY)
+        assert groups_core.list_members(c, 1) == [{"ieee_address": "0xaa", "endpoint": 1}]
+
+    def test_members_missing_key_is_empty(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", self.INVENTORY)
+        assert groups_core.list_members(c, "hallway") == []
+
+    def test_members_unknown_group_is_empty(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", self.INVENTORY)
+        assert groups_core.list_members(c, "nope") == []
+
+    def test_members_requires_group(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="group is required"):
+            groups_core.list_members(c, "")
+
+
+class TestGroupStateControl:
+    def test_set_state_publishes_to_group_set_topic(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        rc = groups_core.set_state(c, "kitchen-lights", {"state": "ON", "brightness": 200})
+        assert rc == 0
+        assert c.last == (
+            "zigbee2mqtt/kitchen-lights/set",
+            {"state": "ON", "brightness": 200},
+        )
+
+    def test_set_state_requires_group(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="group is required"):
+            groups_core.set_state(c, "", {"state": "ON"})
+
+    def test_set_state_requires_fields(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="non-empty dict"):
+            groups_core.set_state(c, "kitchen", {})
+
+    def test_get_state_publishes_blank_values(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        groups_core.get_state(c, "kitchen", ["state", "brightness"])
+        assert c.last == (
+            "zigbee2mqtt/kitchen/get",
+            {"state": "", "brightness": ""},
+        )
+
+    def test_get_state_requires_keys(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="at least one key"):
+            groups_core.get_state(c, "kitchen", [])
+
+    def test_get_state_requires_group(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="group is required"):
+            groups_core.get_state(c, "", ["state"])
+
+    def test_read_state_parses_retained(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/kitchen", json.dumps({"state": "ON", "brightness": 12}))
+        assert groups_core.read_state(c, "kitchen")["brightness"] == 12
+
+    def test_read_state_empty_when_never_published(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        assert groups_core.read_state(c, "kitchen") == {}
+
+    def test_read_state_malformed_returns_raw(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/kitchen", "nope {{")
+        assert groups_core.read_state(c, "kitchen") == {"raw": "nope {{"}
+
+    def test_read_state_non_dict_returns_raw(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/kitchen", json.dumps([1, 2]))
+        assert groups_core.read_state(c, "kitchen") == {"raw": "[1, 2]"}
+
+    def test_read_state_requires_group(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="group is required"):
+            groups_core.read_state(c, "")
+
+
+class TestSceneRealClientIntegration:
+    """Scene publishes through the real BridgeClient over the fake transport."""
+
+    def test_store_then_recall_over_fake_transport(self, fake_paho):
+        from cli_anything.zigbee2mqtt.core import scenes
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+        c = BridgeClient("fake-host", base_topic="z2m")
+        c.connect()
+        scenes.store(c, "Kitchen", 2, name="Chill")
+        scenes.recall(c, "Kitchen", 2)
+        topics = [t for t, _p, _q, _r in c.client.published]  # type: ignore[attr-defined]
+        assert topics == ["z2m/Kitchen/set", "z2m/Kitchen/set"]
+        bodies = [json.loads(p) for _t, p, _q, _r in c.client.published]  # type: ignore[attr-defined]
+        assert bodies[0] == {"scene_store": {"ID": 2, "name": "Chill"}}
+        assert bodies[1] == {"scene_recall": 2}
+        c.disconnect()

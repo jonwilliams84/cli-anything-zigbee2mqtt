@@ -6,9 +6,9 @@ OTA, network admin, bindings, install-codes, external converters, and extensions
 of `cli-anything-homeassistant`. Python 3.10+, Click + paho-mqtt.
 
 ## Layout
-- `cli_anything/zigbee2mqtt/zigbee2mqtt_cli.py` — Click CLI + REPL (entry point `main`); 900+ lines, all command wiring.
-- `cli_anything/zigbee2mqtt/core/` — one module per command group: `mqtt_client.py` (`BridgeClient`, request/response correlation), `bridge.py`, `devices.py`, `bindings.py`, `groups.py`, `ota.py`, `admin.py`, `converters.py`, `extensions.py`, `install_code.py`, `k8s_backend.py` (kubectl helpers), `project.py` (local profile).
-- `cli_anything/zigbee2mqtt/tests/` — `test_core.py`, `test_refine.py`. Run against a fake MQTT transport; no broker needed.
+- `cli_anything/zigbee2mqtt/zigbee2mqtt_cli.py` — Click CLI + REPL (entry point `main`); 1,400+ lines, all command wiring.
+- `cli_anything/zigbee2mqtt/core/` — one module per command group: `mqtt_client.py` (`BridgeClient`, request/response correlation), `bridge.py`, `devices.py`, `bindings.py`, `groups.py` (CRUD + groupcast set/get/state), `scenes.py` (Zigbee scene store/recall/add/rename/remove), `ota.py`, `admin.py`, `converters.py`, `extensions.py`, `install_code.py`, `k8s_backend.py` (kubectl helpers), `project.py` (local profile).
+- `cli_anything/zigbee2mqtt/tests/` — `test_core.py`, `test_refine.py`, `test_full_e2e.py` (CliRunner end-to-end), plus focused regression/coverage suites. Run against a fake MQTT transport; no broker needed.
 - `cli_anything/zigbee2mqtt/skills/SKILL.md` and `skills/cli-anything-zigbee2mqtt/SKILL.md` — agent-facing skill docs (keep in sync with CLI changes).
 - `setup.py` is the only manifest (no pyproject/requirements). README.md (root) is the full command reference.
 
@@ -29,6 +29,10 @@ No lint/CI config present. No release automation — version is hand-bumped in `
 - Most commands need only the MQTT broker. Two paths require `kubectl`: `bridge restart --via-kubectl`
   and the `converter` subcommand (manages `data/external_converters/*.js` files inside the z2m
   container via `core/k8s_backend.py`). Extensions, by contrast, are managed entirely over MQTT.
+- Device/group *cluster* commands (`device set`, `group set`, every `scene` subcommand) are
+  NOT bridge requests: they publish to `<base>/<target>/set` and have no response topic, so
+  success is only confirmed by reading retained state back (`device state` / `group state` /
+  `scene list`). Keep that read-back path working when touching `core/scenes.py`.
 - Every command supports `--json` for machine-readable output.
 
 ## Conventions / gotchas

@@ -141,3 +141,53 @@ def list_members(client: BridgeClient, group: str, *, timeout: float = 5.0) -> l
             members = g.get("members") or []
             return members if isinstance(members, list) else []
     return []
+
+
+# ── group state control (same command topics as devices) ────────────────
+#
+# A group is addressable exactly like a device: z2m subscribes
+# `<base>/<group>/set` and `<base>/<group>/get`, and republishes the group's
+# aggregate state on the retained `<base>/<group>` topic. Writing to the group
+# emits a single Zigbee groupcast instead of N unicasts, so it is both faster
+# and visually atomic (all bulbs change together) — always prefer it over
+# looping `device set` across members.
+
+
+def set_state(client: BridgeClient, group: str, fields: dict) -> int:
+    """Publish to ``<base>/<group>/set`` to command every member at once.
+
+    *fields* is the usual z2m command payload, e.g.
+    ``{"state": "ON", "brightness": 180, "transition": 2}``.
+    """
+    if not group:
+        raise ValueError("group is required (friendly_name or numeric id)")
+    if not isinstance(fields, dict) or not fields:
+        raise ValueError("fields must be a non-empty dict")
+    return client.publish(f"{client.base_topic}/{group}/set", fields)
+
+
+def get_state(client: BridgeClient, group: str, keys: list[str]) -> int:
+    """Publish to ``<base>/<group>/get`` to ask the group to republish state."""
+    if not group:
+        raise ValueError("group is required (friendly_name or numeric id)")
+    if not keys:
+        raise ValueError("at least one key is required (e.g. state, brightness)")
+    return client.publish(f"{client.base_topic}/{group}/get", {k: "" for k in keys})
+
+
+def read_state(client: BridgeClient, group: str, *, timeout: float = 3.0) -> dict:
+    """Return the group's last retained state payload (one-shot, never blocks).
+
+    Mirrors :func:`devices.read_state`. A group that has never been commanded
+    has no retained message, in which case ``{}`` comes back.
+    """
+    if not group:
+        raise ValueError("group is required (friendly_name or numeric id)")
+    raw = client.collect_retained(f"{client.base_topic}/{group}", timeout=timeout)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw}
+    return data if isinstance(data, dict) else {"raw": raw}

@@ -32,6 +32,9 @@ class FakeBridgeClient:
             setattr(self, k, v)
         self._retained: dict[str, str] = {}
         self._request_responses: dict[str, dict] = {}
+        # Fire-and-forget publishes (device/group set, scene commands) have no
+        # bridge/response, so tests assert on what reached the wire.
+        self.published: list[tuple[str, object]] = []
 
     def set_retained(self, topic: str, payload: str) -> None:
         self._retained[topic] = payload
@@ -46,7 +49,12 @@ class FakeBridgeClient:
         return self._request_responses.get(path, {})
 
     def publish(self, topic: str, payload, *, qos: int = 0, retain: bool = False) -> int:
+        self.published.append((topic, payload))
         return 0
+
+    @property
+    def last_published(self) -> tuple[str, object]:
+        return self.published[-1]
 
     def subscribe(self, filter_: str, callback) -> None:
         pass
@@ -1479,3 +1487,425 @@ def test_device_ieee(mock_show, mock_make_client):
     result = runner.invoke(cli, ["--mqtt-host", "x", "device", "ieee", "Unknown"])
     assert result.exit_code != 0, result.output
     assert "not found" in result.output
+
+
+# ── scenes ────────────────────────────────────────────────────────────────────
+
+
+def _patch_client(client):
+    """Patch make_client to hand back `client` for every command in the test."""
+    return patch(
+        "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+        lambda ctx: client,
+    )
+
+
+class TestSceneGroupInHelp:
+    def test_root_help_lists_scene_group(self):
+        result = _runner().invoke(cli, ["--help"])
+        assert result.exit_code == 0, result.output
+        assert "scene" in result.output
+
+    def test_scene_help_lists_every_subcommand(self):
+        result = _runner().invoke(cli, ["scene", "--help"])
+        assert result.exit_code == 0, result.output
+        for sub in ("list", "store", "recall", "add", "rename", "remove", "remove-all"):
+            assert sub in result.output
+
+    def test_group_help_lists_state_commands(self):
+        result = _runner().invoke(cli, ["group", "--help"])
+        assert result.exit_code == 0, result.output
+        for sub in ("set", "get", "state"):
+            assert sub in result.output
+
+
+class TestSceneCommands:
+    def test_scene_store(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "scene", "store", "kitchen", "3", "--name", "Chill"],
+            )
+        assert result.exit_code == 0, result.output
+        assert client.last_published == (
+            "zigbee2mqtt/kitchen/set",
+            {"scene_store": {"ID": 3, "name": "Chill"}},
+        )
+
+    def test_scene_store_json_output(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "scene", "store", "kitchen", "3"]
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["target"] == "kitchen"
+        assert payload["topic"] == "zigbee2mqtt/kitchen/set"
+        assert payload["published"] == {"scene_store": {"ID": 3}}
+
+    def test_scene_store_endpoint(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "scene", "store", "switch1", "1", "--endpoint", "2"],
+            )
+        assert result.exit_code == 0, result.output
+        assert client.last_published[0] == "zigbee2mqtt/switch1/2/set"
+
+    def test_scene_store_rejects_out_of_range_id(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "scene", "store", "kitchen", "300"])
+        assert result.exit_code != 0
+        assert "0-255" in result.output
+        assert client.published == []
+
+    def test_scene_store_rejects_non_numeric_id(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "scene", "store", "kitchen", "abc"])
+        assert result.exit_code != 0
+
+    def test_scene_recall(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "scene", "recall", "kitchen", "3"])
+        assert result.exit_code == 0, result.output
+        assert client.last_published[1] == {"scene_recall": 3}
+
+    def test_scene_recall_bad_id(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "scene", "recall", "kitchen", "-5"])
+        assert result.exit_code != 0
+
+    def test_scene_add_full(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "scene",
+                    "add",
+                    "kitchen",
+                    "5",
+                    "--name",
+                    "Dinner",
+                    "--state",
+                    "ON",
+                    "--brightness",
+                    "120",
+                    "--transition",
+                    "2",
+                    "--color-temp",
+                    "370",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        body = client.last_published[1]["scene_add"]
+        assert body == {
+            "ID": 5,
+            "name": "Dinner",
+            "transition": 2.0,
+            "state": "ON",
+            "brightness": 120,
+            "color_temp": 370,
+        }
+
+    def test_scene_add_color_and_extra_json(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "scene",
+                    "add",
+                    "kitchen",
+                    "5",
+                    "--color",
+                    '{"x":0.4,"y":0.4}',
+                    "--extra",
+                    '{"color_mode":"xy"}',
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        body = client.last_published[1]["scene_add"]
+        assert body["color"] == {"x": 0.4, "y": 0.4}
+        assert body["color_mode"] == "xy"
+
+    def test_scene_add_invalid_color_json(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "add", "kitchen", "5", "--color", "nope{"]
+            )
+        assert result.exit_code != 0
+        assert "not valid JSON" in result.output
+
+    def test_scene_add_color_json_not_object(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "add", "kitchen", "5", "--extra", "[1,2]"]
+            )
+        assert result.exit_code != 0
+        assert "must be a JSON object" in result.output
+
+    def test_scene_add_rejects_bad_brightness(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "add", "kitchen", "5", "--brightness", "999"]
+            )
+        assert result.exit_code != 0
+        assert "brightness must be 0-254" in result.output
+
+    def test_scene_rename(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "rename", "kitchen", "3", "Movie Night"]
+            )
+        assert result.exit_code == 0, result.output
+        assert client.last_published[1] == {"scene_rename": {"ID": 3, "name": "Movie Night"}}
+
+    def test_scene_rename_blank_name(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "rename", "kitchen", "3", " "]
+            )
+        assert result.exit_code != 0
+        assert "name is required" in result.output
+
+    def test_scene_remove(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "scene", "remove", "kitchen", "3"])
+        assert result.exit_code == 0, result.output
+        assert client.last_published[1] == {"scene_remove": 3}
+
+    def test_scene_remove_all_requires_confirmation(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "remove-all", "kitchen"], input="n\n"
+            )
+        assert result.exit_code != 0
+        assert client.published == []
+
+    def test_scene_remove_all_confirmed(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "remove-all", "kitchen"], input="y\n"
+            )
+        assert result.exit_code == 0, result.output
+        assert client.last_published[1] == {"scene_remove_all": ""}
+
+    def test_scene_remove_all_yes_flag(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "scene", "remove-all", "kitchen", "--yes"]
+            )
+        assert result.exit_code == 0, result.output
+
+    def test_scene_list_table(self):
+        client = FakeBridgeClient()
+        client.set_retained(
+            "zigbee2mqtt/kitchen",
+            json.dumps({"state": "ON", "scenes": [{"id": 1, "name": "Chill"}]}),
+        )
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "scene", "list", "kitchen"])
+        assert result.exit_code == 0, result.output
+        assert "Chill" in result.output
+
+    def test_scene_list_json_empty(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "--json", "scene", "list", "nope"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == []
+
+
+class TestGroupStateCommands:
+    def test_group_set(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "group", "set", "kitchen", "state=ON", "brightness=200"],
+            )
+        assert result.exit_code == 0, result.output
+        assert client.last_published == (
+            "zigbee2mqtt/kitchen/set",
+            {"state": "ON", "brightness": 200},
+        )
+
+    def test_group_set_requires_fields(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "group", "set", "kitchen"])
+        assert result.exit_code != 0
+        assert "no fields supplied" in result.output
+
+    def test_group_set_rejects_bare_token(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "group", "set", "kitchen", "ON"])
+        assert result.exit_code != 0
+        assert "expected key=value" in result.output
+
+    def test_group_get(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "group", "get", "kitchen", "state", "brightness"]
+            )
+        assert result.exit_code == 0, result.output
+        assert client.last_published == (
+            "zigbee2mqtt/kitchen/get",
+            {"state": "", "brightness": ""},
+        )
+
+    def test_group_get_requires_keys(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "group", "get", "kitchen"])
+        assert result.exit_code != 0
+        assert "at least one key" in result.output
+
+    def test_group_state(self):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/kitchen", json.dumps({"state": "ON", "brightness": 42}))
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "group", "state", "kitchen"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["brightness"] == 42
+
+    def test_group_state_empty(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "group", "state", "kitchen"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {}
+
+
+class TestSceneWorkflows:
+    """Multi-command workflows combining the new surface with existing commands."""
+
+    def test_create_group_add_member_set_then_store_scene(self):
+        client = FakeBridgeClient()
+        client.set_response("group/add", {"status": "ok", "data": {"id": 4}})
+        client.set_response("group/members/add", {"status": "ok"})
+        r = _runner()
+        with _patch_client(client):
+            assert r.invoke(cli, ["--mqtt-host", "x", "group", "add", "kitchen"]).exit_code == 0
+            assert (
+                r.invoke(
+                    cli, ["--mqtt-host", "x", "group", "add-member", "kitchen", "lamp1"]
+                ).exit_code
+                == 0
+            )
+            assert (
+                r.invoke(
+                    cli,
+                    ["--mqtt-host", "x", "group", "set", "kitchen", "state=ON", "brightness=80"],
+                ).exit_code
+                == 0
+            )
+            assert (
+                r.invoke(
+                    cli, ["--mqtt-host", "x", "scene", "store", "kitchen", "1", "--name", "Dim"]
+                ).exit_code
+                == 0
+            )
+        # the groupcast set landed before the store snapshot
+        assert client.published[0] == (
+            "zigbee2mqtt/kitchen/set",
+            {"state": "ON", "brightness": 80},
+        )
+        assert client.published[1] == (
+            "zigbee2mqtt/kitchen/set",
+            {"scene_store": {"ID": 1, "name": "Dim"}},
+        )
+
+    def test_store_list_recall_remove_round_trip(self):
+        client = FakeBridgeClient()
+        r = _runner()
+        with _patch_client(client):
+            assert (
+                r.invoke(cli, ["--mqtt-host", "x", "scene", "store", "kitchen", "2"]).exit_code == 0
+            )
+            # z2m would now republish state with the scene listed — simulate that
+            client.set_retained(
+                "zigbee2mqtt/kitchen",
+                json.dumps({"state": "ON", "scenes": [{"id": 2, "name": "Chill"}]}),
+            )
+            listed = r.invoke(cli, ["--mqtt-host", "x", "--json", "scene", "list", "kitchen"])
+            assert listed.exit_code == 0, listed.output
+            assert json.loads(listed.output) == [{"id": 2, "name": "Chill"}]
+            assert (
+                r.invoke(cli, ["--mqtt-host", "x", "scene", "recall", "kitchen", "2"]).exit_code
+                == 0
+            )
+            assert (
+                r.invoke(cli, ["--mqtt-host", "x", "scene", "remove", "kitchen", "2"]).exit_code
+                == 0
+            )
+        bodies = [p for _t, p in client.published]
+        assert bodies == [
+            {"scene_store": {"ID": 2}},
+            {"scene_recall": 2},
+            {"scene_remove": 2},
+        ]
+
+    def test_scene_list_falls_back_to_group_inventory(self):
+        client = FakeBridgeClient()
+        client.set_retained(
+            "zigbee2mqtt/bridge/groups",
+            json.dumps(
+                [{"id": 4, "friendly_name": "kitchen", "scenes": [{"id": 7, "name": "Late"}]}]
+            ),
+        )
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "scene", "list", "kitchen"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == [{"id": 7, "name": "Late"}]
+
+    def test_device_set_still_works_after_kv_parser_refactor(self):
+        client = FakeBridgeClient()
+        with _patch_client(client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "set",
+                    "lamp1",
+                    "state=ON",
+                    "brightness=200",
+                    'color={"x":0.3,"y":0.3}',
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert client.last_published == (
+            "zigbee2mqtt/lamp1/set",
+            {"state": "ON", "brightness": 200, "color": {"x": 0.3, "y": 0.3}},
+        )

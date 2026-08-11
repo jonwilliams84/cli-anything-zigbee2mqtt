@@ -20,6 +20,7 @@ from cli_anything.zigbee2mqtt.core import (
     k8s_backend,
     ota as ota_core,
     project,
+    scenes as scenes_core,
 )
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient, MqttError
 
@@ -113,6 +114,40 @@ def _print_table(rows: list[dict]) -> None:
 def _abort(message: str) -> None:
     click.echo(f"error: {message}", err=True)
     sys.exit(1)
+
+
+def _parse_kv_fields(fields) -> dict:
+    """Turn ``key=value`` argv pairs into a z2m command payload.
+
+    Values are JSON-decoded when possible so ``brightness=180`` becomes an int,
+    ``state=ON`` stays a string, and ``color={"x":0.4,"y":0.4}`` becomes a dict.
+    Aborts (exit 1) on a malformed pair or an empty list.
+    """
+    payload: dict = {}
+    for f in fields:
+        if "=" not in f:
+            _abort(f"expected key=value, got {f!r}")
+        k, v = f.split("=", 1)
+        try:
+            payload[k.strip()] = json.loads(v)
+        except json.JSONDecodeError:
+            payload[k.strip()] = v
+    if not payload:
+        _abort("no fields supplied")
+    return payload
+
+
+def _parse_json_obj(raw: str, label: str) -> dict:
+    """Parse a CLI-supplied JSON object argument, aborting with a clear message."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _abort(f"{label} is not valid JSON: {exc}")
+        return {}
+    if not isinstance(parsed, dict):
+        _abort(f"{label} must be a JSON object")
+        return {}
+    return parsed
 
 
 # ──────────────────────────────────────────────────────── root
@@ -457,17 +492,7 @@ def device_set(ctx, friendly_name, fields):
 
     Example: device set 'Lounge Lamp' state=ON brightness=128 color_temp=370
     """
-    payload: dict = {}
-    for f in fields:
-        if "=" not in f:
-            _abort(f"expected key=value, got {f!r}")
-        k, v = f.split("=", 1)
-        try:
-            payload[k.strip()] = json.loads(v)
-        except json.JSONDecodeError:
-            payload[k.strip()] = v
-    if not payload:
-        _abort("no fields supplied")
+    payload = _parse_kv_fields(fields)
     with make_client(ctx) as c:
         rc = devices_core.set_value(c, friendly_name, payload)
     emit(ctx, {"friendly_name": friendly_name, "published": payload, "rc": rc})
@@ -853,6 +878,199 @@ def group_options(ctx, group_name, options_json):
         _abort("options must be a JSON object")
     with make_client(ctx) as c:
         emit(ctx, groups_core.options(c, group_name, opts))
+
+
+@group.command("set")
+@click.argument("group_name")
+@click.argument("fields", nargs=-1)
+@click.pass_context
+def group_set(ctx, group_name, fields):
+    """Command every member of a group at once (single Zigbee groupcast).
+
+    Example: group set kitchen-lights state=ON brightness=200 transition=2
+    """
+    payload = _parse_kv_fields(fields)
+    with make_client(ctx) as c:
+        rc = groups_core.set_state(c, group_name, payload)
+    emit(ctx, {"group": group_name, "published": payload, "rc": rc})
+
+
+@group.command("get")
+@click.argument("group_name")
+@click.argument("keys", nargs=-1)
+@click.pass_context
+def group_get(ctx, group_name, keys):
+    """Ask a group to republish state for the listed keys."""
+    if not keys:
+        _abort("provide at least one key (e.g. state, brightness)")
+    with make_client(ctx) as c:
+        rc = groups_core.get_state(c, group_name, list(keys))
+    emit(ctx, {"group": group_name, "asked_for": list(keys), "rc": rc})
+
+
+@group.command("state")
+@click.argument("group_name")
+@click.option(
+    "--timeout",
+    default=3.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for the retained payload.",
+)
+@click.pass_context
+def group_state(ctx, group_name, timeout):
+    """Read the group's last retained state payload (one-shot)."""
+    with make_client(ctx) as c:
+        emit(ctx, groups_core.read_state(c, group_name, timeout=timeout))
+
+
+# ──────────────────────────────────────────────────────── scenes
+
+
+@cli.group()
+def scene():
+    """Zigbee scenes on a device or group (store / recall / add / rename).
+
+    TARGET is a device or group friendly_name. Storing on a group is the
+    normal pattern — every member keeps the same scene id, so one
+    `scene recall` restores the whole room in a single groupcast.
+    """
+
+
+@scene.command("list")
+@click.argument("target")
+@click.option(
+    "--timeout",
+    default=3.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for the retained payload.",
+)
+@click.pass_context
+def scene_list(ctx, target, timeout):
+    """List the scenes stored on a device or group."""
+    with make_client(ctx) as c:
+        emit(ctx, scenes_core.list_scenes(c, target, timeout=timeout))
+
+
+@scene.command("store")
+@click.argument("target")
+@click.argument("scene_id", type=int)
+@click.option("--name", default=None, help="Label to store alongside the scene.")
+@click.option("--endpoint", default=None, help="Endpoint to scope the scene to (multi-gang).")
+@click.pass_context
+def scene_store(ctx, target, scene_id, name, endpoint):
+    """Snapshot the target's CURRENT state into scene SCENE_ID (0-255).
+
+    Set the lights first (`group set kitchen state=ON brightness=80`), then
+    store — the device captures whatever it is doing right now.
+    """
+    try:
+        with make_client(ctx) as c:
+            emit(ctx, scenes_core.store(c, target, scene_id, name=name, endpoint=endpoint))
+    except ValueError as exc:
+        _abort(str(exc))
+
+
+@scene.command("recall")
+@click.argument("target")
+@click.argument("scene_id", type=int)
+@click.option("--endpoint", default=None, help="Endpoint the scene is stored on.")
+@click.pass_context
+def scene_recall(ctx, target, scene_id, endpoint):
+    """Apply stored scene SCENE_ID on the target."""
+    try:
+        with make_client(ctx) as c:
+            emit(ctx, scenes_core.recall(c, target, scene_id, endpoint=endpoint))
+    except ValueError as exc:
+        _abort(str(exc))
+
+
+@scene.command("add")
+@click.argument("target")
+@click.argument("scene_id", type=int)
+@click.option("--name", default=None, help="Label to store alongside the scene.")
+@click.option("--transition", default=None, type=float, help="Recall fade time in seconds.")
+@click.option("--state", default=None, help="ON / OFF.")
+@click.option("--brightness", default=None, type=int, help="0-254.")
+@click.option("--color-temp", default=None, type=int, help="Mireds.")
+@click.option("--color", default=None, help='JSON object, e.g. \'{"x":0.4,"y":0.4}\'.')
+@click.option(
+    "--extra",
+    default=None,
+    help='Any other exposed attributes as a JSON object, e.g. \'{"color_mode":"xy"}\'.',
+)
+@click.option("--endpoint", default=None, help="Endpoint to scope the scene to (multi-gang).")
+@click.pass_context
+def scene_add(
+    ctx, target, scene_id, name, transition, state, brightness, color_temp, color, extra, endpoint
+):
+    """Write scene SCENE_ID explicitly, without setting the lights first."""
+    color_obj = _parse_json_obj(color, "--color") if color else None
+    extra_obj = _parse_json_obj(extra, "--extra") if extra else None
+    try:
+        with make_client(ctx) as c:
+            emit(
+                ctx,
+                scenes_core.add(
+                    c,
+                    target,
+                    scene_id,
+                    name=name,
+                    transition=transition,
+                    state=state,
+                    brightness=brightness,
+                    color_temp=color_temp,
+                    color=color_obj,
+                    extra=extra_obj,
+                    endpoint=endpoint,
+                ),
+            )
+    except ValueError as exc:
+        _abort(str(exc))
+
+
+@scene.command("rename")
+@click.argument("target")
+@click.argument("scene_id", type=int)
+@click.argument("name")
+@click.option("--endpoint", default=None, help="Endpoint the scene is stored on.")
+@click.pass_context
+def scene_rename(ctx, target, scene_id, name, endpoint):
+    """Rename stored scene SCENE_ID (metadata only, light values untouched)."""
+    try:
+        with make_client(ctx) as c:
+            emit(ctx, scenes_core.rename(c, target, scene_id, name, endpoint=endpoint))
+    except ValueError as exc:
+        _abort(str(exc))
+
+
+@scene.command("remove")
+@click.argument("target")
+@click.argument("scene_id", type=int)
+@click.option("--endpoint", default=None, help="Endpoint the scene is stored on.")
+@click.pass_context
+def scene_remove(ctx, target, scene_id, endpoint):
+    """Delete one scene from the target's scene table."""
+    try:
+        with make_client(ctx) as c:
+            emit(ctx, scenes_core.remove(c, target, scene_id, endpoint=endpoint))
+    except ValueError as exc:
+        _abort(str(exc))
+
+
+@scene.command("remove-all")
+@click.argument("target")
+@click.option("--endpoint", default=None, help="Endpoint to clear.")
+@click.confirmation_option(prompt="Delete EVERY scene stored on this target?")
+@click.pass_context
+def scene_remove_all(ctx, target, endpoint):
+    """Delete every scene stored on the target."""
+    try:
+        with make_client(ctx) as c:
+            emit(ctx, scenes_core.remove_all(c, target, endpoint=endpoint))
+    except ValueError as exc:
+        _abort(str(exc))
 
 
 # ──────────────────────────────────────────────────────── ota

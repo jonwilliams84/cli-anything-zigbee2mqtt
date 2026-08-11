@@ -39,7 +39,8 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 |---|---|
 | `bridge` | `info / state / status / restart / health / options-get / options-set / watch-events / watch-logging` |
 | `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / generate-converter / configure-reporting / bind / unbind / bindings` |
-| `group` | `list / add / remove / rename / add-member / remove-member / remove-all / options` |
+| `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state` |
+| `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check / update / schedule` |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup` |
 | `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
@@ -98,7 +99,37 @@ cli-anything-zigbee2mqtt group options kitchen-lights \
 cli-anything-zigbee2mqtt install-code add "QR-CODE-TEXT-HERE"
 cli-anything-zigbee2mqtt extension list
 cli-anything-zigbee2mqtt extension save my-ext.js ./my-ext.js
+
+# Groups as a single addressable light (one Zigbee groupcast, not N unicasts)
+cli-anything-zigbee2mqtt group set kitchen-lights state=ON brightness=200 transition=2
+cli-anything-zigbee2mqtt group get kitchen-lights state brightness
+cli-anything-zigbee2mqtt --json group state kitchen-lights
+
+# Scenes — store the room as it is now, recall it later
+cli-anything-zigbee2mqtt group set kitchen-lights state=ON brightness=60
+cli-anything-zigbee2mqtt scene store kitchen-lights 1 --name Chill
+cli-anything-zigbee2mqtt --json scene list kitchen-lights
+cli-anything-zigbee2mqtt scene recall kitchen-lights 1
+
+# Or write a scene without touching the lights first
+cli-anything-zigbee2mqtt scene add kitchen-lights 2 --name Dinner \
+  --state ON --brightness 200 --color-temp 370 --transition 2
+cli-anything-zigbee2mqtt scene rename kitchen-lights 2 'Dinner Party'
+cli-anything-zigbee2mqtt scene remove kitchen-lights 2
+cli-anything-zigbee2mqtt scene remove-all kitchen-lights --yes
 ```
+
+### Scenes: what to know
+
+Scenes are a Zigbee cluster feature, so they are published to the device/group
+command topic (`<base>/<target>/set`) rather than the bridge request topic:
+`scene_store` snapshots the target's **current** state, `scene_add` writes the
+values explicitly, and `scene_recall` replays them. Store on a *group* so every
+member keeps the same scene id — then one `scene recall` restores the whole room
+in a single groupcast. Multi-gang devices keep scenes per endpoint, so pass
+`--endpoint <n>`. Valid ids are 0-255. `scene list` reads back the `scenes`
+array z2m publishes in the target's retained state (falling back to the retained
+`bridge/groups` inventory) so you can verify a store actually landed.
 
 ## Architecture
 
@@ -113,6 +144,8 @@ cli_anything/zigbee2mqtt/
 │   │                       # / configure-reporting
 │   ├── bindings.py         # device/bind, device/unbind, list_bindings (local)
 │   ├── groups.py           # group CRUD + membership + options
+│   │                       # + set_state / get_state / read_state (groupcast control)
+│   ├── scenes.py           # scene store/recall/add/remove/remove_all/rename + list
 │   ├── ota.py              # OTA check / update / schedule
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
 │   ├── converters.py       # external_converters/ file mgmt (kubectl)
@@ -124,8 +157,13 @@ cli_anything/zigbee2mqtt/
     └── repl_skin.py
 ```
 
-Every mutation is a `zigbee2mqtt/bridge/request/<path>` publish correlated by a
-`transaction` id, with the response read from `zigbee2mqtt/bridge/response/<path>`.
+Every *bridge* mutation is a `zigbee2mqtt/bridge/request/<path>` publish correlated
+by a `transaction` id, with the response read from
+`zigbee2mqtt/bridge/response/<path>`. Device/group commands — `device set`,
+`group set`, and every `scene` subcommand — are Zigbee cluster commands instead,
+so they publish to `<base>/<target>/set` (or `<base>/<target>/<endpoint>/set`) and
+have no response topic; verify them by reading the target's retained state
+(`device state` / `group state` / `scene list`).
 File-level state (the external converters) lives in the z2m container's
 filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 
@@ -135,10 +173,12 @@ filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-57 unit tests cover the BridgeClient (against a fake MQTT transport), every
-mutator in bindings / install_code / extensions / groups.options, and the
-read-side helpers in devices.py (read_state / find_stale /
-generate_external_definition / configure_reporting). No broker needed.
+553 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
+a fake MQTT transport, every mutator in bindings / install_code / extensions /
+groups / scenes, the read-side helpers in devices.py (read_state / find_stale /
+generate_external_definition / configure_reporting), and multi-command workflows
+(create group → add member → groupcast set → store/recall scene). No broker and
+no kubectl needed.
 
 ## License
 
