@@ -25,3 +25,16 @@ def update(client: BridgeClient, id_: str, *, timeout: float = 600.0) -> dict:
 def schedule(client: BridgeClient, id_: str, *, timeout: float = 10.0) -> dict:
     """Schedule an OTA update (z2m runs it during the next idle window)."""
     return client.request("device/ota_update/schedule", payload={"id": id_}, timeout=timeout)
+
+
+def unschedule(client: BridgeClient, id_: str, *, timeout: float = 10.0) -> dict:
+    """Cancel an OTA update that was queued with :func:`schedule`.
+
+    z2m keeps a scheduled update pending until the device next checks in, which
+    for a battery device can be hours. This removes it from the queue — the
+    counterpart to ``schedule`` and the safe way to back out of a firmware roll
+    you no longer want.
+    """
+    if not id_:
+        raise ValueError("id_ is required (friendly_name or ieee_address)")
+    return client.request("device/ota_update/unschedule", payload={"id": id_}, timeout=timeout)

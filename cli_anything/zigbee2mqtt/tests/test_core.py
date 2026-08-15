@@ -1517,3 +1517,538 @@ class TestSceneRealClientIntegration:
         assert bodies[0] == {"scene_store": {"ID": 2, "name": "Chill"}}
         assert bodies[1] == {"scene_recall": 2}
         c.disconnect()
+
+
+# ── refine: exposes introspection / availability / raw cluster access ────────
+
+
+class SubscribingClient(RecordingClient):
+    """RecordingClient plus a subscribe() that replays seeded retained topics.
+
+    ``devices.availability_sweep`` subscribes to ``<base>/#`` once and reads
+    whatever the broker replays, so the fake has to deliver the retained
+    messages to the callback the same way paho would.
+    """
+
+    def __init__(self, base_topic: str = "zigbee2mqtt"):
+        super().__init__(base_topic=base_topic)
+        self.subscriptions: list[str] = []
+
+    def subscribe(self, filter_: str, callback) -> None:
+        self.subscriptions.append(filter_)
+        prefix = filter_[:-1] if filter_.endswith("#") else filter_
+        for topic, payload in self._retained.items():
+            if filter_.endswith("#") and topic.startswith(prefix):
+                callback(topic, payload)
+            elif topic == filter_:
+                callback(topic, payload)
+
+
+class TestDecodeAccess:
+    def test_all_bits(self):
+        assert devices_core.decode_access(7) == "published,set,get"
+
+    def test_read_only(self):
+        assert devices_core.decode_access(1) == "published"
+
+    def test_settable_only(self):
+        assert devices_core.decode_access(2) == "set"
+
+    def test_none_is_blank(self):
+        assert devices_core.decode_access(None) == ""
+
+    def test_garbage_is_blank(self):
+        assert devices_core.decode_access("nope") == ""
+
+
+class TestFlattenExposes:
+    LIGHT = [
+        {
+            "type": "light",
+            "features": [
+                {"type": "binary", "name": "state", "property": "state", "access": 7},
+                {
+                    "type": "numeric",
+                    "name": "brightness",
+                    "property": "brightness",
+                    "access": 7,
+                    "value_min": 0,
+                    "value_max": 254,
+                },
+            ],
+        },
+        {
+            "type": "composite",
+            "property": "color_options",
+            "features": [
+                {
+                    "type": "numeric",
+                    "name": "execute_if_off",
+                    "property": "execute_if_off",
+                    "access": 2,
+                }
+            ],
+        },
+        {
+            "type": "enum",
+            "name": "effect",
+            "property": "effect",
+            "access": 2,
+            "values": ["blink", "breathe"],
+        },
+        {"type": "numeric", "name": "linkquality", "property": "linkquality", "access": 1},
+    ]
+
+    def test_flattens_nested_features(self):
+        rows = devices_core.flatten_exposes(self.LIGHT)
+        props = [r["property"] for r in rows]
+        assert props == [
+            "state",
+            "brightness",
+            "color_options.execute_if_off",
+            "effect",
+            "linkquality",
+        ]
+
+    def test_composite_children_are_namespaced(self):
+        rows = devices_core.flatten_exposes(self.LIGHT)
+        row = next(r for r in rows if r["property"].startswith("color_options"))
+        assert row["property"] == "color_options.execute_if_off"
+        assert row["access_flags"] == "set"
+
+    def test_keeps_range_and_values_metadata(self):
+        rows = devices_core.flatten_exposes(self.LIGHT)
+        brightness = next(r for r in rows if r["property"] == "brightness")
+        assert brightness["value_min"] == 0
+        assert brightness["value_max"] == 254
+        effect = next(r for r in rows if r["property"] == "effect")
+        assert effect["values"] == ["blink", "breathe"]
+
+    def test_empty_and_none_are_safe(self):
+        assert devices_core.flatten_exposes(None) == []
+        assert devices_core.flatten_exposes([]) == []
+
+    def test_skips_non_dict_and_propertyless_entries(self):
+        rows = devices_core.flatten_exposes(["junk", {"type": "numeric", "name": "no_property"}])
+        assert rows == []
+
+
+class TestDeviceExposes:
+    DEVICES = json.dumps(
+        [
+            {
+                "friendly_name": "Lounge Lamp",
+                "ieee_address": "0xaaa",
+                "definition": {
+                    "model": "LCT001",
+                    "exposes": [
+                        {
+                            "type": "light",
+                            "features": [
+                                {
+                                    "type": "binary",
+                                    "name": "state",
+                                    "property": "state",
+                                    "access": 7,
+                                }
+                            ],
+                        },
+                        {
+                            "type": "numeric",
+                            "name": "linkquality",
+                            "property": "linkquality",
+                            "access": 1,
+                        },
+                    ],
+                },
+            },
+            {"friendly_name": "Mystery", "ieee_address": "0xbbb"},
+        ]
+    )
+
+    def _client(self):
+        c = SubscribingClient()
+        c.set_retained("zigbee2mqtt/bridge/devices", self.DEVICES)
+        return c
+
+    def test_returns_flat_rows(self):
+        rows = devices_core.exposes(self._client(), "Lounge Lamp")
+        assert [r["property"] for r in rows] == ["state", "linkquality"]
+
+    def test_settable_only_filters_read_only(self):
+        rows = devices_core.exposes(self._client(), "Lounge Lamp", settable_only=True)
+        assert [r["property"] for r in rows] == ["state"]
+
+    def test_lookup_by_ieee(self):
+        rows = devices_core.exposes(self._client(), "0xAAA")
+        assert rows and rows[0]["property"] == "state"
+
+    def test_unknown_device_returns_empty(self):
+        assert devices_core.exposes(self._client(), "nope") == []
+
+    def test_device_without_definition_returns_empty(self):
+        assert devices_core.exposes(self._client(), "Mystery") == []
+
+    def test_requires_ident(self):
+        with pytest.raises(ValueError, match="ident is required"):
+            devices_core.exposes(self._client(), "")
+
+
+class TestParseAvailability:
+    def test_plain_string(self):
+        assert devices_core.parse_availability("online") == "online"
+
+    def test_json_state(self):
+        assert devices_core.parse_availability('{"state": "offline"}') == "offline"
+
+    def test_uppercase_normalised(self):
+        assert devices_core.parse_availability("ONLINE") == "online"
+
+    def test_none_and_blank(self):
+        assert devices_core.parse_availability(None) is None
+        assert devices_core.parse_availability("   ") is None
+
+    def test_malformed_json(self):
+        assert devices_core.parse_availability("{oops") is None
+
+    def test_json_without_state(self):
+        assert devices_core.parse_availability('{"other": 1}') is None
+
+
+class TestReadAvailability:
+    def test_reads_retained_topic(self):
+        c = SubscribingClient()
+        c.set_retained("zigbee2mqtt/Lounge Lamp/availability", '{"state":"online"}')
+        out = devices_core.read_availability(c, "Lounge Lamp")
+        assert out == {"friendly_name": "Lounge Lamp", "availability": "online", "online": True}
+
+    def test_offline(self):
+        c = SubscribingClient()
+        c.set_retained("zigbee2mqtt/sensor/availability", "offline")
+        out = devices_core.read_availability(c, "sensor")
+        assert out["online"] is False
+
+    def test_missing_is_unknown(self):
+        out = devices_core.read_availability(SubscribingClient(), "sensor")
+        assert out["availability"] is None
+        assert out["online"] is None
+
+    def test_requires_name(self):
+        with pytest.raises(ValueError, match="friendly_name is required"):
+            devices_core.read_availability(SubscribingClient(), "")
+
+
+class TestAvailabilitySweep:
+    def _client(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [
+                    {"friendly_name": "Coordinator", "type": "Coordinator", "ieee_address": "0x00"},
+                    {
+                        "friendly_name": "Lounge Lamp",
+                        "type": "Router",
+                        "ieee_address": "0xaaa",
+                        "definition": {"model": "LCT001"},
+                    },
+                    {"friendly_name": "sensor", "type": "EndDevice", "ieee_address": "0xbbb"},
+                    {"friendly_name": "quiet", "type": "EndDevice", "ieee_address": "0xccc"},
+                ]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/Lounge Lamp/availability", '{"state":"online"}')
+        c.set_retained("zigbee2mqtt/sensor/availability", "offline")
+        return c
+
+    def test_offline_first_and_coordinator_skipped(self):
+        rows = devices_core.availability_sweep(self._client(), duration=0)
+        assert [r["friendly_name"] for r in rows] == ["sensor", "Lounge Lamp", "quiet"]
+        assert all(r["friendly_name"] != "Coordinator" for r in rows)
+
+    def test_unknown_device_has_null_availability(self):
+        rows = devices_core.availability_sweep(self._client(), duration=0)
+        quiet = next(r for r in rows if r["friendly_name"] == "quiet")
+        assert quiet["availability"] is None
+        assert quiet["online"] is None
+
+    def test_offline_only_filter(self):
+        rows = devices_core.availability_sweep(self._client(), duration=0, offline_only=True)
+        assert [r["friendly_name"] for r in rows] == ["sensor"]
+
+    def test_subscribes_to_wildcard_once(self):
+        c = self._client()
+        devices_core.availability_sweep(c, duration=0)
+        assert c.subscriptions == ["zigbee2mqtt/#"]
+
+    def test_carries_model_and_last_seen(self):
+        rows = devices_core.availability_sweep(self._client(), duration=0)
+        lamp = next(r for r in rows if r["friendly_name"] == "Lounge Lamp")
+        assert lamp["model"] == "LCT001"
+        assert lamp["online"] is True
+
+    def test_empty_inventory(self):
+        assert devices_core.availability_sweep(SubscribingClient(), duration=0) == []
+
+
+class TestAttributeValidation:
+    def test_check_cluster_name(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        assert attributes.check_cluster("genBasic") == "genBasic"
+
+    def test_check_cluster_numeric_string(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        assert attributes.check_cluster("0x0006") == 6
+        assert attributes.check_cluster("6") == 6
+
+    def test_check_cluster_int_passthrough(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        assert attributes.check_cluster(6) == 6
+
+    def test_check_cluster_rejects_empty(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        with pytest.raises(ValueError, match="cluster is required"):
+            attributes.check_cluster("  ")
+
+    def test_check_cluster_rejects_bool(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        with pytest.raises(ValueError, match="name or numeric id"):
+            attributes.check_cluster(True)
+
+    def test_check_attributes_mixed(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        assert attributes.check_attributes(["onOff", "0x0002"]) == ["onOff", 2]
+
+    def test_check_attributes_rejects_empty_list(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        with pytest.raises(ValueError, match="at least one attribute"):
+            attributes.check_attributes([])
+
+    def test_check_attributes_rejects_blank_entry(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        with pytest.raises(ValueError, match="non-empty"):
+            attributes.check_attributes(["onOff", " "])
+
+    def test_check_target_rejects_blank(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        with pytest.raises(ValueError, match="target is required"):
+            attributes.check_target("")
+
+    def test_check_options_merges_manufacturer_code(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        assert attributes.check_options({"a": 1}, manufacturer_code=4107) == {
+            "a": 1,
+            "manufacturerCode": 4107,
+        }
+
+    def test_check_options_defaults_empty(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        assert attributes.check_options(None) == {}
+
+    def test_check_options_rejects_non_dict(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        with pytest.raises(ValueError, match="options must be a dict"):
+            attributes.check_options(["a=1"])
+
+
+class TestAttributeReadWrite:
+    def test_read_publishes_zcl_read(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        out = attributes.read(c, "Lounge Lamp", "genBasic", ["zclVersion"])
+        assert c.last == (
+            "zigbee2mqtt/Lounge Lamp/set",
+            {"read": {"cluster": "genBasic", "attributes": ["zclVersion"]}},
+        )
+        assert out["rc"] == 0
+        assert out["topic"] == "zigbee2mqtt/Lounge Lamp/set"
+
+    def test_read_with_endpoint_and_options(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        attributes.read(
+            c,
+            "Lounge Lamp",
+            "genBasic",
+            ["zclVersion"],
+            endpoint=2,
+            manufacturer_code=4107,
+        )
+        topic, payload = c.last
+        assert topic == "zigbee2mqtt/Lounge Lamp/2/set"
+        assert payload["read"]["options"] == {"manufacturerCode": 4107}
+
+    def test_read_requires_attributes(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="at least one attribute"):
+            attributes.read(c, "Lounge Lamp", "genBasic", [])
+
+    def test_write_publishes_zcl_write(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        attributes.write(c, "Lounge Lamp", "genOnOff", {"onOff": 1})
+        assert c.last == (
+            "zigbee2mqtt/Lounge Lamp/set",
+            {"write": {"cluster": "genOnOff", "payload": {"onOff": 1}}},
+        )
+
+    def test_write_requires_payload(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="non-empty dict"):
+            attributes.write(c, "Lounge Lamp", "genOnOff", {})
+
+    def test_write_copies_payload(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        payload = {"onOff": 1}
+        attributes.write(c, "Lounge Lamp", "genOnOff", payload)
+        payload["onOff"] = 99
+        assert c.last[1]["write"]["payload"] == {"onOff": 1}
+
+    def test_set_topic_endpoint_variants(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        assert attributes.set_topic(c, "Lamp") == "zigbee2mqtt/Lamp/set"
+        assert attributes.set_topic(c, "Lamp", endpoint="") == "zigbee2mqtt/Lamp/set"
+        assert attributes.set_topic(c, "Lamp", endpoint=3) == "zigbee2mqtt/Lamp/3/set"
+
+    def test_read_over_fake_transport(self, fake_paho):
+        from cli_anything.zigbee2mqtt.core import attributes
+        from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
+
+        c = BridgeClient("fake-host", base_topic="z2m")
+        c.connect()
+        attributes.write(c, "Lamp", "genOnOff", {"onOff": 1})
+        topics = [t for t, _p, _q, _r in c.client.published]  # type: ignore[attr-defined]
+        assert topics == ["z2m/Lamp/set"]
+        body = json.loads(c.client.published[0][1])  # type: ignore[attr-defined]
+        assert body == {"write": {"cluster": "genOnOff", "payload": {"onOff": 1}}}
+        c.disconnect()
+
+
+class TestOtaUnschedule:
+    def test_unschedule_hits_the_right_path(self):
+        class Req:
+            base_topic = "zigbee2mqtt"
+
+            def __init__(self):
+                self.calls = []
+
+            def request(self, path, payload=None, *, timeout=15.0):
+                self.calls.append((path, payload, timeout))
+                return {"status": "ok"}
+
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = Req()
+        assert ota_core.unschedule(c, "Radiator") == {"status": "ok"}
+        assert c.calls[0][0] == "device/ota_update/unschedule"
+        assert c.calls[0][1] == {"id": "Radiator"}
+
+    def test_unschedule_requires_id(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        with pytest.raises(ValueError, match="id_ is required"):
+            ota_core.unschedule(RecordingClient(), "")
+
+
+class TestRefineEdgeCases:
+    """Remaining branches of the refine surface."""
+
+    def test_check_attributes_rejects_none(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        with pytest.raises(ValueError, match="at least one attribute"):
+            attributes.check_attributes(None)
+
+    def test_check_attributes_accepts_numeric_ids(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        assert attributes.check_attributes([0, 7]) == [0, 7]
+
+    def test_write_carries_options(self):
+        from cli_anything.zigbee2mqtt.core import attributes
+
+        c = RecordingClient()
+        attributes.write(
+            c,
+            "Lamp",
+            "manuSpecificTuya",
+            {"attr": 1},
+            options={"disableDefaultResponse": True},
+            manufacturer_code=4417,
+        )
+        assert c.last[1]["write"]["options"] == {
+            "disableDefaultResponse": True,
+            "manufacturerCode": 4417,
+        }
+
+    def test_sweep_waits_for_the_requested_duration(self):
+        import time as _time
+
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([{"friendly_name": "lamp", "type": "Router", "ieee_address": "0xaaa"}]),
+        )
+        started = _time.monotonic()
+        rows = devices_core.availability_sweep(c, duration=0.12)
+        assert _time.monotonic() - started >= 0.1
+        assert [r["friendly_name"] for r in rows] == ["lamp"]
+
+    def test_sweep_falls_back_to_ieee_topic(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([{"friendly_name": "0xaaa", "type": "EndDevice", "ieee_address": "0xaaa"}]),
+        )
+        c.set_retained("zigbee2mqtt/0xaaa/availability", "online")
+        rows = devices_core.availability_sweep(c, duration=0)
+        assert rows[0]["online"] is True
+
+    def test_sweep_ignores_non_availability_topics(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([{"friendly_name": "lamp", "type": "Router", "ieee_address": "0xaaa"}]),
+        )
+        c.set_retained("zigbee2mqtt/lamp", json.dumps({"state": "ON"}))
+        rows = devices_core.availability_sweep(c, duration=0)
+        assert rows[0]["availability"] is None
+
+    def test_sweep_ctrl_c_returns_what_it_has(self, monkeypatch):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([{"friendly_name": "lamp", "type": "Router", "ieee_address": "0xaaa"}]),
+        )
+        c.set_retained("zigbee2mqtt/lamp/availability", "online")
+
+        def _boom(_seconds):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(devices_core.time, "sleep", _boom)
+        rows = devices_core.availability_sweep(c, duration=5)
+        assert [r["friendly_name"] for r in rows] == ["lamp"]
+        assert rows[0]["online"] is True

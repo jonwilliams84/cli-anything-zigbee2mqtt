@@ -394,3 +394,217 @@ def last_seen(client: BridgeClient, id_: str, *, timeout: float = 5.0) -> dict:
     except (ValueError, AttributeError):
         result["minutes_since_seen"] = None
     return result
+
+
+# ── exposes introspection (local, from the retained device record) ──────
+
+#: z2m's ``access`` bitmask (see the exposes docs).
+ACCESS_PUBLISHED = 0b001  # value is published in the state topic
+ACCESS_SET = 0b010  # value can be written with `<name>/set`
+ACCESS_GET = 0b100  # value can be requested with `<name>/get`
+
+
+def decode_access(access: Optional[int]) -> str:
+    """Render z2m's numeric ``access`` bitmask as a short ``pubs/set/get`` string.
+
+    ``5`` → ``"published,get"``. Returns ``""`` when *access* is missing so
+    table output stays aligned.
+    """
+    if access is None:
+        return ""
+    try:
+        bits = int(access)
+    except (TypeError, ValueError):
+        return ""
+    parts = []
+    if bits & ACCESS_PUBLISHED:
+        parts.append("published")
+    if bits & ACCESS_SET:
+        parts.append("set")
+    if bits & ACCESS_GET:
+        parts.append("get")
+    return ",".join(parts)
+
+
+def flatten_exposes(exposes: Optional[list], *, _prefix: str = "") -> list[dict]:
+    """Flatten a device definition's ``exposes`` tree into one row per property.
+
+    z2m nests exposes: a ``light`` expose carries ``features`` (state,
+    brightness, color_temp …), and a ``composite`` expose namespaces its
+    features under its own property. This walks the tree depth-first and
+    returns flat rows suitable for a table::
+
+        {"property", "name", "type", "access", "access_flags", "unit",
+         "values", "value_min", "value_max", "endpoint", "description"}
+
+    Rows keep the order z2m declared them in.
+    """
+    rows: list[dict] = []
+    for exp in exposes or []:
+        if not isinstance(exp, dict):
+            continue
+        features = exp.get("features")
+        prop = exp.get("property")
+        if isinstance(features, list) and features:
+            # A composite namespaces its children under its own property;
+            # light/switch/cover/… expose their features at the top level.
+            child_prefix = _prefix
+            if exp.get("type") == "composite" and prop:
+                child_prefix = f"{_prefix}{prop}."
+            rows.extend(flatten_exposes(features, _prefix=child_prefix))
+            continue
+        if not prop:
+            continue
+        access = exp.get("access")
+        rows.append(
+            {
+                "property": f"{_prefix}{prop}",
+                "name": exp.get("name"),
+                "type": exp.get("type"),
+                "access": access,
+                "access_flags": decode_access(access),
+                "unit": exp.get("unit"),
+                "values": exp.get("values"),
+                "value_min": exp.get("value_min"),
+                "value_max": exp.get("value_max"),
+                "endpoint": exp.get("endpoint"),
+                "description": exp.get("description"),
+            }
+        )
+    return rows
+
+
+def exposes(
+    client: BridgeClient,
+    ident: str,
+    *,
+    settable_only: bool = False,
+    timeout: float = 5.0,
+) -> list[dict]:
+    """Return the flattened exposes table for one device.
+
+    Purely local — it reads the retained ``bridge/devices`` inventory that
+    :func:`list_devices` already uses, so there is no extra round trip and no
+    need to wake the device. This is the fastest way to find out which
+    properties ``device set`` / ``device get`` will actually accept.
+
+    ``settable_only=True`` keeps only writable properties (access bit 2).
+    Returns ``[]`` when the device is unknown or has no definition.
+    """
+    if not ident:
+        raise ValueError("ident is required (friendly_name or ieee_address)")
+    dev = show(client, ident)
+    if not dev:
+        return []
+    defn = dev.get("definition") or {}
+    rows = flatten_exposes(defn.get("exposes"))
+    if settable_only:
+        rows = [r for r in rows if (r.get("access") or 0) & ACCESS_SET]
+    return rows
+
+
+# ── availability (retained <base>/<name>/availability) ──────────────────
+
+AVAILABILITY_SUFFIX = "/availability"
+
+
+def parse_availability(raw: Optional[str]) -> Optional[str]:
+    """Normalise an availability payload to ``"online"`` / ``"offline"``.
+
+    z2m publishes either the bare string ``online`` / ``offline`` (legacy) or
+    ``{"state": "online"}`` (default since 1.34). Returns ``None`` when the
+    payload is missing or unrecognisable.
+    """
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        state = data.get("state") if isinstance(data, dict) else None
+        return str(state).lower() if state else None
+    return text.lower()
+
+
+def read_availability(client: BridgeClient, friendly_name: str, *, timeout: float = 3.0) -> dict:
+    """Read one device's retained availability state (one-shot, never blocks long).
+
+    Availability is only published when z2m's ``availability`` feature is
+    enabled; otherwise ``availability`` comes back ``None``.
+    """
+    if not friendly_name:
+        raise ValueError("friendly_name is required")
+    topic = f"{client.base_topic}/{friendly_name}{AVAILABILITY_SUFFIX}"
+    raw = client.collect_retained(topic, timeout=timeout)
+    state = parse_availability(raw)
+    return {
+        "friendly_name": friendly_name,
+        "availability": state,
+        "online": None if state is None else state == "online",
+    }
+
+
+def availability_sweep(
+    client: BridgeClient,
+    *,
+    duration: float = 2.0,
+    offline_only: bool = False,
+    timeout: float = 5.0,
+) -> list[dict]:
+    """Availability for every known device, in one pass.
+
+    Subscribes to ``<base>/#`` once and collects the retained
+    ``…/availability`` messages that arrive, instead of doing one blocking
+    read per device (which would cost ``N × timeout`` on a big network).
+    Results are joined onto the ``bridge/devices`` inventory so devices that
+    never published availability still appear, with ``availability: null``.
+
+    Rows are sorted offline-first, then by friendly_name. ``offline_only=True``
+    drops everything that is currently online or unknown.
+    """
+    devices = list_devices(client, timeout=timeout)
+    seen: dict[str, Optional[str]] = {}
+    prefix = f"{client.base_topic}/"
+
+    def _cb(topic: str, payload: str) -> None:
+        if not topic.startswith(prefix) or not topic.endswith(AVAILABILITY_SUFFIX):
+            return
+        name = topic[len(prefix) : -len(AVAILABILITY_SUFFIX)]
+        seen[name] = parse_availability(payload)
+
+    client.subscribe(f"{client.base_topic}/#", _cb)
+    end = time.time() + max(duration, 0.0)
+    try:
+        while time.time() < end:
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+
+    rows: list[dict] = []
+    for d in devices:
+        if d.get("type") == "Coordinator":
+            continue
+        name = d.get("friendly_name")
+        state = seen.get(name) if name else None
+        if state is None and d.get("ieee_address"):
+            state = seen.get(d["ieee_address"])
+        if offline_only and state != "offline":
+            continue
+        defn = d.get("definition") or {}
+        rows.append(
+            {
+                "friendly_name": name,
+                "ieee_address": d.get("ieee_address"),
+                "availability": state,
+                "online": None if state is None else state == "online",
+                "type": d.get("type"),
+                "model": defn.get("model"),
+                "last_seen": d.get("last_seen"),
+            }
+        )
+    rows.sort(key=lambda r: (r["availability"] != "offline", str(r["friendly_name"] or "")))
+    return rows

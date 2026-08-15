@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, direct bind/unbind + bindings inspection, last-seen staleness sweeps, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, availability checks and offline sweeps, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -16,6 +16,10 @@ agent can reliably tell whether an operation succeeded.
 - Triggering OTA firmware checks / updates.
 - Opening the network (`permit_join`) to add a new device or close it.
 - Reading the current device or group inventory in JSON form.
+- Finding out which properties a device accepts before writing to it
+  (`device exposes`) — including units, ranges and enum values.
+- Checking which devices are unreachable right now (`device availability-sweep`).
+- Reaching a cluster attribute no converter models (`device read` / `device write`).
 - Driving a whole room at once (`group set`) instead of looping over members.
 - Capturing or replaying a lighting scene (`scene store` / `scene recall`).
 - Generating a network map (raw / graphviz / plantuml).
@@ -40,10 +44,10 @@ Two external deps:
 | Group | Examples |
 |---|---|
 | `bridge` | `bridge info`, `bridge state`, `bridge restart`, `bridge restart --via-kubectl`, `bridge health`, `bridge options-get`, `bridge options-set '{"advanced":{"log_level":"info"}}'`, `bridge watch-events --duration 30`, `bridge watch-logging --duration 10` |
-| `device` | `device list`, `device list --full`, `device show <name>`, `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]` |
+| `device` | `device list`, `device list --full`, `device show <name>`, `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]`, `device exposes <name> --settable`, `device availability <name>`, `device availability-sweep --offline-only`, `device read <name> --cluster genBasic --attribute zclVersion`, `device write <name> --cluster genOnOff onOff=1`, `device disable <name>`, `device enable <name>`, `device last-seen <name>` |
 | `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained) |
 | `scene` | `scene list <target>`, `scene store <target> <id> --name Chill`, `scene recall <target> <id>`, `scene add <target> <id> --state ON --brightness 200 --color-temp 370 --transition 2`, `scene rename <target> <id> <name>`, `scene remove <target> <id>`, `scene remove-all <target> --yes` — TARGET is a device or group friendly_name; add `--endpoint <n>` for multi-gang devices |
-| `ota` | `ota check <name>`, `ota update <name>`, `ota schedule <name>` |
+| `ota` | `ota check <name>`, `ota update <name>`, `ota schedule <name>`, `ota unschedule <name>` |
 | `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup` |
 | `install-code` | `install-code add <QR-text>`, `install-code remove <QR-text>` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `converter list`, `converter show <name.js>`, `converter add <name.js> ./local.js`, `converter remove <name.js>` |
@@ -80,6 +84,31 @@ proves the publish succeeded. To verify, read it back: `scene list <target>`
 means "set the lights how you want them, then capture" — so `group set` first,
 then `scene store`. Use `scene add` when scripting unattended (no need to disturb
 the current light state). Scene ids are 0-255 and per endpoint.
+
+**Check `device exposes` before `device set`.** It is a local read of the
+retained inventory (no round trip, works on a sleeping battery device) and gives
+the exact property names, `access` flags (`published,set,get`), units, ranges and
+enum values. `--settable` narrows it to what is writable. Guessing property names
+and watching a `device set` silently do nothing is the most common failure mode.
+
+**`availability` null means unknown, not offline.** The availability topics only
+exist when z2m's `availability` feature is enabled. Use
+`device availability-sweep --offline-only` for the reachability verdict and
+`device stale --threshold N` (raw `last_seen`) as the independent cross-check —
+if availability is null everywhere, fall back to `device stale`.
+
+**`device read` / `device write` are ZCL cluster commands, not bridge requests.**
+Exit 0 only means the publish succeeded. The read's answer arrives
+asynchronously on the device's state topic, so chain
+`device read <name> --cluster … --attribute …` with `device state <name>`, or run
+`device watch <name>` alongside. Cluster/attribute may be names or numeric ids
+(`0x0006`); manufacturer-specific attributes need `--manufacturer-code` or the
+device rejects the frame. Prefer the modelled property via `device set` whenever
+`device exposes` lists one — raw writes bypass all converter validation.
+
+**`ota unschedule` backs out a queued update.** A `schedule` stays pending until
+the device next checks in (hours, on battery), so cancel with `ota unschedule
+<name>` rather than waiting it out.
 
 **Permit-join auto-closes.** `permit-join on --time 60` opens for 60s then
 closes. Don't leave it open indefinitely.
@@ -154,6 +183,33 @@ cli-anything-zigbee2mqtt device bindings switch_kitchen
 cli-anything-zigbee2mqtt device unbind switch_kitchen light_kitchen
 ```
 
+### Find out what a device supports, then drive it
+
+```bash
+# Exactly which properties `device set` will accept, with ranges and enums
+cli-anything-zigbee2mqtt --json device exposes 'Lounge Lamp' --settable \
+  | jq '.[] | {property, type, value_min, value_max, values}'
+
+# Then write one of them, and read the result back
+cli-anything-zigbee2mqtt device set 'Lounge Lamp' brightness=200
+cli-anything-zigbee2mqtt --json device state 'Lounge Lamp'
+```
+
+### Reach an attribute the converter does not model
+
+```bash
+# Issue the ZCL read (fire-and-forget) ...
+cli-anything-zigbee2mqtt device read 'Lounge Lamp' \
+  --cluster genBasic --attribute zclVersion --attribute modelId
+# ... then pick the answer up off the device's state topic
+cli-anything-zigbee2mqtt --json device state 'Lounge Lamp'
+
+# Manufacturer-specific write (Tuya / Bosch attributes need the code)
+cli-anything-zigbee2mqtt device write 'Radiator' \
+  --cluster hvacThermostat --manufacturer-code 4617 --endpoint 1 \
+  operatingMode=1
+```
+
 ### Find dead devices
 
 ```bash
@@ -162,6 +218,11 @@ cli-anything-zigbee2mqtt --json device stale --threshold 360 | jq '.[].friendly_
 
 # Quick check on the one device you care about
 cli-anything-zigbee2mqtt device state sensor_balcony
+cli-anything-zigbee2mqtt device availability sensor_balcony
+
+# Whole-network reachability in one pass (offline first)
+cli-anything-zigbee2mqtt --json device availability-sweep --offline-only \
+  | jq '.[].friendly_name'
 ```
 
 ### Fix wrong reporting intervals

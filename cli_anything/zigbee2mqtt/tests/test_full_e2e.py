@@ -1957,3 +1957,423 @@ class TestScenePreflightValidation:
         result = self._invoke(["scene", "remove-all", "   ", "--yes"])
         assert result.exit_code != 0
         assert "target is required" in result.output
+
+
+# ── refine: exposes / availability / raw cluster access / ota unschedule ─────
+
+
+class SubscribingFakeClient(FakeBridgeClient):
+    """FakeBridgeClient whose subscribe() replays seeded retained topics.
+
+    ``device availability-sweep`` reads a wildcard subscription rather than
+    doing one blocking retained read per device, so the fake has to deliver
+    those messages the way a broker would.
+    """
+
+    def __init__(self, **overrides):
+        super().__init__(**overrides)
+        self.subscriptions: list[str] = []
+
+    def subscribe(self, filter_: str, callback) -> None:
+        self.subscriptions.append(filter_)
+        prefix = filter_[:-1] if filter_.endswith("#") else filter_
+        for topic, payload in self._retained.items():
+            if filter_.endswith("#") and topic.startswith(prefix):
+                callback(topic, payload)
+            elif topic == filter_:
+                callback(topic, payload)
+
+
+EXPOSES_INVENTORY = json.dumps(
+    [
+        {
+            "friendly_name": "lamp1",
+            "ieee_address": "0xaaa",
+            "type": "Router",
+            "definition": {
+                "model": "LCT001",
+                "exposes": [
+                    {
+                        "type": "light",
+                        "features": [
+                            {"type": "binary", "name": "state", "property": "state", "access": 7},
+                            {
+                                "type": "numeric",
+                                "name": "brightness",
+                                "property": "brightness",
+                                "access": 7,
+                                "value_min": 0,
+                                "value_max": 254,
+                            },
+                        ],
+                    },
+                    {
+                        "type": "numeric",
+                        "name": "linkquality",
+                        "property": "linkquality",
+                        "access": 1,
+                        "unit": "lqi",
+                    },
+                ],
+            },
+        },
+        {"friendly_name": "sensor1", "ieee_address": "0xbbb", "type": "EndDevice"},
+    ]
+)
+
+
+def _patched(client):
+    return patch(
+        "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+        lambda ctx: client,
+    )
+
+
+class TestDeviceExposesCommand:
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", EXPOSES_INVENTORY)
+        return client
+
+    def test_exposes_json(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "exposes", "lamp1"]
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert [row["property"] for row in data] == ["state", "brightness", "linkquality"]
+
+    def test_exposes_table_output(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "exposes", "lamp1"])
+        assert result.exit_code == 0, result.output
+        assert "brightness" in result.output
+        assert "published,set,get" in result.output
+
+    def test_exposes_settable_filter(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "exposes", "lamp1", "--settable"]
+            )
+        assert result.exit_code == 0, result.output
+        props = [row["property"] for row in json.loads(result.output)]
+        assert props == ["state", "brightness"]
+        assert "linkquality" not in props
+
+    def test_exposes_unknown_device_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "exposes", "ghost"])
+        assert result.exit_code != 0
+        assert "no exposed properties" in result.output
+
+    def test_exposes_device_without_definition_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "exposes", "sensor1"])
+        assert result.exit_code != 0
+
+
+class TestDeviceAvailabilityCommands:
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", EXPOSES_INVENTORY)
+        client.set_retained("zigbee2mqtt/lamp1/availability", '{"state":"online"}')
+        client.set_retained("zigbee2mqtt/sensor1/availability", "offline")
+        return client
+
+    def test_availability_single_device(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "availability", "lamp1"]
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["availability"] == "online"
+        assert data["online"] is True
+
+    def test_availability_unknown_device_is_null(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "availability", "ghost"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["availability"] is None
+
+    def test_availability_sweep_offline_first(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "availability-sweep",
+                    "--duration",
+                    "0",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [r["friendly_name"] for r in rows] == ["sensor1", "lamp1"]
+
+    def test_availability_sweep_offline_only(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "availability-sweep",
+                    "--duration",
+                    "0",
+                    "--offline-only",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [r["friendly_name"] for r in rows] == ["sensor1"]
+
+
+class TestDeviceReadWriteCommands:
+    def test_read_publishes_zcl_read(self):
+        client = FakeBridgeClient()
+        with _patched(client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "read",
+                    "lamp1",
+                    "--cluster",
+                    "genBasic",
+                    "--attribute",
+                    "zclVersion",
+                    "--attribute",
+                    "modelId",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        topic, payload = client.last_published
+        assert topic == "zigbee2mqtt/lamp1/set"
+        assert payload == {"read": {"cluster": "genBasic", "attributes": ["zclVersion", "modelId"]}}
+
+    def test_read_with_endpoint_and_manufacturer_code(self):
+        client = FakeBridgeClient()
+        with _patched(client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "read",
+                    "lamp1",
+                    "--cluster",
+                    "0x0000",
+                    "--attribute",
+                    "zclVersion",
+                    "--endpoint",
+                    "2",
+                    "--manufacturer-code",
+                    "4107",
+                    "--option",
+                    "disableDefaultResponse=true",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        topic, payload = client.last_published
+        assert topic == "zigbee2mqtt/lamp1/2/set"
+        assert payload["read"]["cluster"] == 0
+        assert payload["read"]["options"] == {
+            "disableDefaultResponse": True,
+            "manufacturerCode": 4107,
+        }
+
+    def test_read_requires_attribute(self):
+        client = FakeBridgeClient()
+        with _patched(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "device", "read", "lamp1", "--cluster", "genBasic"]
+            )
+        assert result.exit_code != 0
+
+    def test_write_publishes_zcl_write(self):
+        client = FakeBridgeClient()
+        with _patched(client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "write",
+                    "lamp1",
+                    "--cluster",
+                    "genOnOff",
+                    "onOff=1",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        topic, payload = client.last_published
+        assert topic == "zigbee2mqtt/lamp1/set"
+        assert payload == {"write": {"cluster": "genOnOff", "payload": {"onOff": 1}}}
+
+    def test_write_requires_fields(self):
+        client = FakeBridgeClient()
+        with _patched(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "device", "write", "lamp1", "--cluster", "genOnOff"]
+            )
+        assert result.exit_code != 0
+        assert "no fields supplied" in result.output
+
+    def test_write_rejects_bad_kv(self):
+        client = FakeBridgeClient()
+        with _patched(client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "device", "write", "lamp1", "--cluster", "genOnOff", "onOff"],
+            )
+        assert result.exit_code != 0
+        assert "expected key=value" in result.output
+
+
+class TestAttributePreflightNeverConnects:
+    """Bad cluster/attribute args must fail before an MQTT connection is opened."""
+
+    @staticmethod
+    def _exploding_client(ctx):
+        raise AssertionError("make_client must not be called for invalid arguments")
+
+    def _invoke(self, argv):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            self._exploding_client,
+        ):
+            return _runner().invoke(cli, ["--mqtt-host", "x", *argv])
+
+    def test_blank_target_never_connects(self):
+        result = self._invoke(
+            ["device", "read", "  ", "--cluster", "genBasic", "--attribute", "zclVersion"]
+        )
+        assert result.exit_code != 0
+        assert "target is required" in result.output
+
+    def test_blank_cluster_never_connects(self):
+        result = self._invoke(
+            ["device", "read", "lamp1", "--cluster", " ", "--attribute", "zclVersion"]
+        )
+        assert result.exit_code != 0
+        assert "cluster is required" in result.output
+
+    def test_blank_attribute_never_connects(self):
+        result = self._invoke(
+            ["device", "read", "lamp1", "--cluster", "genBasic", "--attribute", " "]
+        )
+        assert result.exit_code != 0
+
+    def test_write_blank_cluster_never_connects(self):
+        result = self._invoke(["device", "write", "lamp1", "--cluster", " ", "onOff=1"])
+        assert result.exit_code != 0
+        assert "cluster is required" in result.output
+
+
+class TestOtaUnscheduleCommand:
+    def test_unschedule(self):
+        client = FakeBridgeClient()
+        client.set_response("device/ota_update/unschedule", {"status": "ok"})
+        with _patched(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "ota", "unschedule", "radiator"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["status"] == "ok"
+
+    def test_unschedule_blank_id_errors(self):
+        client = FakeBridgeClient()
+        with _patched(client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "ota", "unschedule", ""])
+        assert result.exit_code != 0
+        assert "id_ is required" in result.output
+
+
+class TestRefineWorkflows:
+    """Multi-command workflows combining the new commands with existing ones."""
+
+    def test_exposes_then_set_then_state(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", EXPOSES_INVENTORY)
+        with _patched(client):
+            r = _runner()
+            exposed = r.invoke(cli, ["--mqtt-host", "x", "--json", "device", "exposes", "lamp1"])
+            assert exposed.exit_code == 0, exposed.output
+            settable = [
+                row["property"]
+                for row in json.loads(exposed.output)
+                if "set" in (row["access_flags"] or "")
+            ]
+            assert "brightness" in settable
+            # drive the property the exposes table just advertised
+            done = r.invoke(cli, ["--mqtt-host", "x", "device", "set", "lamp1", "brightness=200"])
+            assert done.exit_code == 0, done.output
+        assert client.published[-1] == ("zigbee2mqtt/lamp1/set", {"brightness": 200})
+
+    def test_read_then_state_readback(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/lamp1", json.dumps({"zclVersion": 3}))
+        with _patched(client):
+            r = _runner()
+            issued = r.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "device",
+                    "read",
+                    "lamp1",
+                    "--cluster",
+                    "genBasic",
+                    "--attribute",
+                    "zclVersion",
+                ],
+            )
+            assert issued.exit_code == 0, issued.output
+            back = r.invoke(cli, ["--mqtt-host", "x", "--json", "device", "state", "lamp1"])
+            assert back.exit_code == 0, back.output
+            assert json.loads(back.output)["zclVersion"] == 3
+
+    def test_sweep_finds_offline_then_last_seen(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", EXPOSES_INVENTORY)
+        client.set_retained("zigbee2mqtt/sensor1/availability", "offline")
+        with _patched(client):
+            r = _runner()
+            sweep = r.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "availability-sweep",
+                    "--duration",
+                    "0",
+                    "--offline-only",
+                ],
+            )
+            assert sweep.exit_code == 0, sweep.output
+            offline = json.loads(sweep.output)
+            assert offline and offline[0]["friendly_name"] == "sensor1"
+            detail = r.invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "device", "last-seen", offline[0]["friendly_name"]],
+            )
+            assert detail.exit_code == 0, detail.output
+            assert json.loads(detail.output)["ieee_address"] == "0xbbb"
