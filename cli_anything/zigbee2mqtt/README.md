@@ -42,6 +42,15 @@ cli-anything-zigbee2mqtt device get 'Lounge Lamp' state brightness
 # OTA
 cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota update 'Radiator - Master Bedroom'
+cli-anything-zigbee2mqtt ota unschedule 'Radiator - Master Bedroom'
+
+# Introspect + reachability (both read the retained topics, no device wake-up)
+cli-anything-zigbee2mqtt device exposes 'Lounge Lamp' --settable
+cli-anything-zigbee2mqtt --json device availability-sweep --offline-only
+
+# Raw ZCL attribute access (answer arrives on the device state topic)
+cli-anything-zigbee2mqtt device read 'Lounge Lamp' --cluster genBasic --attribute zclVersion
+cli-anything-zigbee2mqtt device write 'Lounge Lamp' --cluster genOnOff onOff=1
 
 # Open the network for 60 seconds (pair a new device)
 cli-anything-zigbee2mqtt network permit-join on --time 60

@@ -10,6 +10,7 @@ import click
 
 from cli_anything.zigbee2mqtt.core import (
     admin,
+    attributes as attributes_core,
     bindings as bindings_core,
     bridge as bridge_core,
     converters as converters_core,
@@ -165,6 +166,30 @@ def _preflight_scene(target, scene_id=None, name=None) -> None:
             scenes_core.check_name(name)
     except ValueError as exc:
         _abort(str(exc))
+
+
+def _preflight_attributes(target, cluster, *, attributes=None, payload=None) -> dict:
+    """Validate raw cluster read/write args BEFORE opening an MQTT connection.
+
+    Returns the normalised ``{cluster, attributes|payload}`` so the caller does
+    not have to re-parse. Aborts (exit 1) with the real problem instead of a
+    broker connection error.
+    """
+    try:
+        out: dict = {
+            "target": attributes_core.check_target(target),
+            "cluster": attributes_core.check_cluster(cluster),
+        }
+        if attributes is not None:
+            out["attributes"] = attributes_core.check_attributes(attributes)
+        if payload is not None:
+            if not payload:
+                raise ValueError("payload must be a non-empty dict of attribute=value")
+            out["payload"] = payload
+        return out
+    except ValueError as exc:
+        _abort(str(exc))
+        return {}
 
 
 # ──────────────────────────────────────────────────────── root
@@ -781,6 +806,158 @@ def device_last_seen(ctx, id_or_name):
         emit(ctx, devices_core.last_seen(c, id_or_name))
 
 
+@device.command("exposes")
+@click.argument("ident")
+@click.option(
+    "--settable",
+    is_flag=True,
+    default=False,
+    help="Only properties you can write with `device set` (access bit 2).",
+)
+@click.pass_context
+def device_exposes(ctx, ident, settable):
+    """List the properties a device exposes (types, units, ranges, access).
+
+    Read locally from the retained device inventory — no round trip, and it
+    works on a sleeping battery device. Use it before `device set` to find the
+    exact property names and valid values.
+    """
+    with make_client(ctx) as c:
+        rows = devices_core.exposes(c, ident, settable_only=settable)
+    if not rows:
+        _abort(f"no exposed properties for {ident!r} (unknown device or no definition)")
+    emit(ctx, rows)
+
+
+@device.command("availability")
+@click.argument("friendly_name")
+@click.option(
+    "--timeout",
+    default=3.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for the retained payload.",
+)
+@click.pass_context
+def device_availability(ctx, friendly_name, timeout):
+    """Read a device's retained availability (online / offline)."""
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.read_availability(c, friendly_name, timeout=timeout))
+
+
+@device.command("availability-sweep")
+@click.option(
+    "--duration",
+    default=2.0,
+    type=float,
+    show_default=True,
+    help="Seconds to collect retained availability messages.",
+)
+@click.option("--offline-only", is_flag=True, default=False, help="Only show offline devices.")
+@click.pass_context
+def device_availability_sweep(ctx, duration, offline_only):
+    """Availability for every device in one pass (offline-first)."""
+    with make_client(ctx) as c:
+        emit(
+            ctx,
+            devices_core.availability_sweep(c, duration=duration, offline_only=offline_only),
+        )
+
+
+@device.command("read")
+@click.argument("ident")
+@click.option("--cluster", required=True, help="Cluster name or numeric id, e.g. genBasic / 0x0000")
+@click.option(
+    "--attribute",
+    "attributes",
+    multiple=True,
+    required=True,
+    help="Attribute to read (repeatable), e.g. zclVersion",
+)
+@click.option("--endpoint", default=None, help="Endpoint id (default: the device's first).")
+@click.option(
+    "--manufacturer-code",
+    type=int,
+    default=None,
+    help="Manufacturer code for manufacturer-specific attributes.",
+)
+@click.option(
+    "--option",
+    "options",
+    multiple=True,
+    help="Extra ZCL option as key=value (repeatable).",
+)
+@click.pass_context
+def device_read(ctx, ident, cluster, attributes, endpoint, manufacturer_code, options):
+    """Read raw cluster attributes not covered by the device's exposes block.
+
+    Fire-and-forget: the answer arrives asynchronously on the device's state
+    topic, so follow with `device state IDENT` (or run `device watch IDENT`).
+    """
+    opts = _parse_kv_fields(options) if options else None
+    _preflight_attributes(ident, cluster, attributes=list(attributes))
+    try:
+        with make_client(ctx) as c:
+            emit(
+                ctx,
+                attributes_core.read(
+                    c,
+                    ident,
+                    cluster,
+                    list(attributes),
+                    endpoint=endpoint,
+                    options=opts,
+                    manufacturer_code=manufacturer_code,
+                ),
+            )
+    except ValueError as exc:
+        _abort(str(exc))
+
+
+@device.command("write")
+@click.argument("ident")
+@click.argument("fields", nargs=-1)
+@click.option("--cluster", required=True, help="Cluster name or numeric id, e.g. genOnOff / 0x0006")
+@click.option("--endpoint", default=None, help="Endpoint id (default: the device's first).")
+@click.option(
+    "--manufacturer-code",
+    type=int,
+    default=None,
+    help="Manufacturer code for manufacturer-specific attributes.",
+)
+@click.option(
+    "--option",
+    "options",
+    multiple=True,
+    help="Extra ZCL option as key=value (repeatable).",
+)
+@click.pass_context
+def device_write(ctx, ident, fields, cluster, endpoint, manufacturer_code, options):
+    """Write raw cluster attributes. Pass attribute=value pairs.
+
+    Example: device write 'Lounge Lamp' --cluster genOnOff onOff=1
+    """
+    payload = _parse_kv_fields(fields)
+    opts = _parse_kv_fields(options) if options else None
+    _preflight_attributes(ident, cluster, payload=payload)
+    try:
+        with make_client(ctx) as c:
+            emit(
+                ctx,
+                attributes_core.write(
+                    c,
+                    ident,
+                    cluster,
+                    payload,
+                    endpoint=endpoint,
+                    options=opts,
+                    manufacturer_code=manufacturer_code,
+                ),
+            )
+    except ValueError as exc:
+        _abort(str(exc))
+
+
 # ──────────────────────────────────────────────────────── groups
 
 
@@ -1135,6 +1312,18 @@ def ota_schedule(ctx, id_or_name):
     """Schedule an OTA update for a device."""
     with make_client(ctx) as c:
         emit(ctx, ota_core.schedule(c, id_or_name))
+
+
+@ota.command("unschedule")
+@click.argument("id_or_name")
+@click.pass_context
+def ota_unschedule(ctx, id_or_name):
+    """Cancel a previously scheduled OTA update."""
+    with make_client(ctx) as c:
+        try:
+            emit(ctx, ota_core.unschedule(c, id_or_name))
+        except (MqttError, ValueError) as exc:
+            _abort(str(exc))
 
 
 # ──────────────────────────────────────────────────────── network admin

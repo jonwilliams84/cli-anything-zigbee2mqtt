@@ -38,10 +38,10 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | Group | Examples |
 |---|---|
 | `bridge` | `info / state / status / restart / health / options-get / options-set / watch-events / watch-logging` |
-| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / generate-converter / configure-reporting / bind / unbind / bindings` |
+| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / exposes / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state` |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
-| `ota` | `check / update / schedule` |
+| `ota` | `check / update / schedule / unschedule` |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup` |
 | `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `list / show / add / remove` — manages `data/external_converters/*.js` via kubectl |
@@ -72,6 +72,22 @@ cli-anything-zigbee2mqtt device get 'Lounge Lamp' state brightness
 # OTA
 cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota update 'Radiator - Master Bedroom'
+cli-anything-zigbee2mqtt ota schedule 'Radiator - Master Bedroom'
+cli-anything-zigbee2mqtt ota unschedule 'Radiator - Master Bedroom'   # back out
+
+# What can this device actually do? (local read of the retained inventory)
+cli-anything-zigbee2mqtt device exposes 'Lounge Lamp'
+cli-anything-zigbee2mqtt --json device exposes 'Lounge Lamp' --settable
+
+# Is it reachable right now? (z2m availability feature)
+cli-anything-zigbee2mqtt device availability 'Lounge Lamp'
+cli-anything-zigbee2mqtt --json device availability-sweep --offline-only
+
+# Raw ZCL access for attributes no converter models
+cli-anything-zigbee2mqtt device read 'Lounge Lamp' --cluster genBasic --attribute zclVersion
+cli-anything-zigbee2mqtt device state 'Lounge Lamp'        # the answer lands here
+cli-anything-zigbee2mqtt device write 'Lounge Lamp' --cluster genOnOff onOff=1 \
+  --manufacturer-code 4107
 
 # Open the network for 60 seconds (pair a new device)
 cli-anything-zigbee2mqtt network permit-join on --time 60
@@ -131,6 +147,35 @@ in a single groupcast. Multi-gang devices keep scenes per endpoint, so pass
 array z2m publishes in the target's retained state (falling back to the retained
 `bridge/groups` inventory) so you can verify a store actually landed.
 
+### Exposes, availability and raw ZCL: what to know
+
+`device exposes` is a **local** read of the retained `bridge/devices` inventory —
+no round trip, and it works on a sleeping battery device. It flattens z2m's
+nested exposes tree (a `light` expose carries `state` / `brightness` / … as
+features; a `composite` namespaces its children as `parent.child`) into one row
+per property with the `access` bitmask decoded — `published,set,get`. Run it
+before `device set` to get the exact property names, units and ranges;
+`--settable` keeps only what is writable.
+
+`device availability` / `device availability-sweep` read the retained
+`<base>/<name>/availability` topics, which only exist when z2m's `availability`
+feature is enabled — otherwise everything comes back `null` (unknown, not
+offline). The sweep subscribes once to `<base>/#` rather than doing one blocking
+read per device, so it stays fast on a large network, and it joins onto the
+device inventory so devices that never published availability still show up.
+Rows come back offline-first. `last_seen` (see `device stale`) is the
+complementary signal: availability is z2m's verdict, `last_seen` is the raw
+evidence.
+
+`device read` / `device write` reach attributes that no converter models, by
+publishing `{"read": …}` / `{"write": …}` to the device command topic. Like
+scenes they are Zigbee cluster commands with **no** `bridge/response`, so a zero
+exit code only proves the publish succeeded — the value comes back
+asynchronously on the device's own state topic. Read it with `device state
+<name>` (retained) or capture it live with `device watch <name>`. Cluster and
+attribute ids may be names (`genBasic`, `zclVersion`) or numbers (`0x0000`, `6`);
+manufacturer-specific attributes need `--manufacturer-code`.
+
 ## Architecture
 
 ```
@@ -141,12 +186,14 @@ cli_anything/zigbee2mqtt/
 │   ├── bridge.py           # info/state/restart/health/options/watch
 │   ├── devices.py          # list/show/rename/remove/configure/interview/set/get
 │   │                       # + state (retained one-shot) / stale / generate-converter
-│   │                       # / configure-reporting
+│   │                       # / configure-reporting / exposes (local introspection)
+│   │                       # / availability + availability_sweep
+│   ├── attributes.py       # raw ZCL cluster read / write (device read|write)
 │   ├── bindings.py         # device/bind, device/unbind, list_bindings (local)
 │   ├── groups.py           # group CRUD + membership + options
 │   │                       # + set_state / get_state / read_state (groupcast control)
 │   ├── scenes.py           # scene store/recall/add/remove/remove_all/rename + list
-│   ├── ota.py              # OTA check / update / schedule
+│   ├── ota.py              # OTA check / update / schedule / unschedule
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
 │   ├── converters.py       # external_converters/ file mgmt (kubectl)
 │   ├── extensions.py       # extension save/remove/list/show (MQTT)
@@ -173,12 +220,13 @@ filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-560 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
+645 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
 a fake MQTT transport, every mutator in bindings / install_code / extensions /
-groups / scenes, the read-side helpers in devices.py (read_state / find_stale /
-generate_external_definition / configure_reporting), and multi-command workflows
-(create group → add member → groupcast set → store/recall scene). No broker and
-no kubectl needed.
+groups / scenes / attributes, the read-side helpers in devices.py (read_state /
+find_stale / exposes / availability_sweep / generate_external_definition /
+configure_reporting), and multi-command workflows (create group → add member →
+groupcast set → store/recall scene; `device exposes` → `device set`; raw
+`device read` → `device state` read-back). No broker and no kubectl needed.
 
 ## License
 
