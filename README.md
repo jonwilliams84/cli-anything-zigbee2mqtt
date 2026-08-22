@@ -37,8 +37,8 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 
 | Group | Examples |
 |---|---|
-| `bridge` | `info / state / status / restart / health / options-get / options-set / watch-events / watch-logging` |
-| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / exposes / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
+| `bridge` | `info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging` |
+| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state` |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check / update / schedule / unschedule` |
@@ -82,6 +82,18 @@ cli-anything-zigbee2mqtt --json device exposes 'Lounge Lamp' --settable
 # Is it reachable right now? (z2m availability feature)
 cli-anything-zigbee2mqtt device availability 'Lounge Lamp'
 cli-anything-zigbee2mqtt --json device availability-sweep --offline-only
+
+# Which endpoints / clusters does it have? (local, no round trip)
+cli-anything-zigbee2mqtt device endpoints 'Lounge Lamp'
+cli-anything-zigbee2mqtt device clusters 'Lounge Lamp' --direction input
+cli-anything-zigbee2mqtt --json device clusters wall_switch --direction output  # bind candidates
+cli-anything-zigbee2mqtt --json device reportings          # every configured report, network-wide
+
+# Which cluster / attribute names will z2m accept?
+cli-anything-zigbee2mqtt bridge definitions
+cli-anything-zigbee2mqtt bridge definitions --cluster genOnOff
+cli-anything-zigbee2mqtt bridge definitions --cluster genOnOff --commands
+cli-anything-zigbee2mqtt --json bridge definitions --custom   # manufacturer clusters
 
 # Raw ZCL access for attributes no converter models
 cli-anything-zigbee2mqtt device read 'Lounge Lamp' --cluster genBasic --attribute zclVersion
@@ -175,6 +187,44 @@ asynchronously on the device's own state topic. Read it with `device state
 <name>` (retained) or capture it live with `device watch <name>`. Cluster and
 attribute ids may be names (`genBasic`, `zclVersion`) or numbers (`0x0000`, `6`);
 manufacturer-specific attributes need `--manufacturer-code`.
+
+### Endpoints, clusters and the cluster dictionary
+
+The raw commands above only help once you know *which* cluster to name, and that
+information is already on the wire. `device endpoints` and `device clusters` are
+**local** reads of the retained `bridge/devices` inventory (same source as
+`device exposes`, so no round trip and no device wake-up):
+
+* `device endpoints <name>` — one row per endpoint with cluster / binding /
+  report / scene counts. Start here on a multi-gang switch or multi-outlet plug
+  to work out which `--endpoint` to pass to `device read`, `device write` or
+  `scene store`.
+* `device clusters <name>` — one row per (endpoint, cluster). `--direction input`
+  lists the clusters the device *implements* (what `device read` / `device write`
+  / `device configure-reporting` can target); `--direction output` lists what it
+  *sends* (what `device bind` can wire to a target). The `bound` and `reported`
+  columns say whether a binding or an attribute report already exists for that
+  cluster, so unbound outputs and unreported sensors are visible at a glance.
+* `device reportings [<name>]` — the read-back for `device configure-reporting`.
+  The bridge response only confirms the request was accepted; this shows what
+  z2m actually recorded (intervals and reportable change included). With no
+  argument it sweeps the whole network — the quick way to find sensors whose
+  interview never set reports up.
+
+`bridge definitions` reads the retained `bridge/definitions` topic (z2m 1.35+),
+which is the zigbee-herdsman cluster dictionary the running bridge is using —
+the authoritative list of names the ZCL commands accept, including manufacturer
+clusters contributed by external converters. Bare, it lists every cluster with
+its numeric id and definition counts; `--cluster genOnOff` (name, `6` or
+`0x0006`) lists that cluster's attributes, `--commands` its commands instead, and
+`--custom` lists the per-device custom clusters. Typical loop:
+
+```bash
+cli-anything-zigbee2mqtt device clusters plug1 --direction input   # genOnOff on ep 1
+cli-anything-zigbee2mqtt bridge definitions --cluster genOnOff     # attribute: onOff
+cli-anything-zigbee2mqtt device read plug1 --cluster genOnOff --attribute onOff --endpoint 1
+cli-anything-zigbee2mqtt device state plug1                        # the answer lands here
+```
 
 ## Architecture
 

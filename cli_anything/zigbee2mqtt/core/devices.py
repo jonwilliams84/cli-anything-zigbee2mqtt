@@ -608,3 +608,245 @@ def availability_sweep(
         )
     rows.sort(key=lambda r: (r["availability"] != "offline", str(r["friendly_name"] or "")))
     return rows
+
+
+# ── endpoint / cluster introspection (local, from bridge/devices) ───────
+#
+# The retained ``bridge/devices`` inventory carries, per endpoint:
+#
+#     "endpoints": {"1": {"clusters": {"input": [...], "output": [...]},
+#                         "bindings": [...], "configured_reportings": [...],
+#                         "scenes": [...]}}
+#
+# That is exactly the information ``device read`` / ``device write`` /
+# ``device bind --cluster`` / ``device configure-reporting`` need, so the
+# helpers below expose it without any round trip — they work fine against a
+# sleeping battery device.
+
+#: Accepted values for the ``direction`` filter on :func:`clusters`.
+CLUSTER_DIRECTIONS = ("input", "output", "all")
+
+
+def _endpoint_key(ep_id) -> int | str:
+    """Endpoint ids arrive as JSON object keys (strings) — prefer ints."""
+    try:
+        return int(ep_id)
+    except (TypeError, ValueError):
+        return ep_id
+
+
+def _iter_endpoints(device: dict):
+    """Yield ``(endpoint_id, endpoint_dict)`` pairs, lowest endpoint first."""
+    endpoints = device.get("endpoints") or {}
+    if not isinstance(endpoints, dict):
+        return
+    for ep_id, ep in endpoints.items():
+        if isinstance(ep, dict):
+            yield _endpoint_key(ep_id), ep
+
+
+def _match_endpoint(ep_num, wanted) -> bool:
+    if wanted is None or wanted == "":
+        return True
+    return str(ep_num) == str(wanted)
+
+
+def flatten_endpoint_clusters(
+    device: dict,
+    *,
+    direction: str = "all",
+    endpoint: Optional[int | str] = None,
+) -> list[dict]:
+    """Flatten one device record into one row per (endpoint, cluster).
+
+    Pure function over a ``bridge/devices`` entry — no MQTT. Each row::
+
+        {"endpoint", "cluster", "direction", "bound", "reported"}
+
+    ``direction`` is ``"input"`` (clusters the device *implements*, i.e. what
+    you can read/write), ``"output"`` (clusters it *sends*, i.e. what you can
+    bind away to a target) or ``"all"``. ``bound`` says an outgoing binding
+    already exists for that cluster on that endpoint; ``reported`` says an
+    attribute report is configured for it. Rows are ordered by endpoint, then
+    input-before-output, then cluster name.
+    """
+    if direction not in CLUSTER_DIRECTIONS:
+        raise ValueError(f"direction must be one of {list(CLUSTER_DIRECTIONS)}, got {direction!r}")
+    rows: list[dict] = []
+    for ep_num, ep in _iter_endpoints(device):
+        if not _match_endpoint(ep_num, endpoint):
+            continue
+        clusters = ep.get("clusters") or {}
+        if not isinstance(clusters, dict):
+            clusters = {}
+        bound = {
+            b.get("cluster")
+            for b in (ep.get("bindings") or [])
+            if isinstance(b, dict) and b.get("cluster")
+        }
+        reported = {
+            r.get("cluster")
+            for r in (ep.get("configured_reportings") or [])
+            if isinstance(r, dict) and r.get("cluster")
+        }
+        for kind in ("input", "output"):
+            if direction not in (kind, "all"):
+                continue
+            names = clusters.get(kind) or []
+            if not isinstance(names, list):
+                continue
+            for name in names:
+                rows.append(
+                    {
+                        "endpoint": ep_num,
+                        "cluster": name,
+                        "direction": kind,
+                        "bound": name in bound,
+                        "reported": name in reported,
+                    }
+                )
+    rows.sort(key=lambda r: (str(r["endpoint"]), r["direction"] != "input", str(r["cluster"])))
+    return rows
+
+
+def clusters(
+    client: BridgeClient,
+    ident: str,
+    *,
+    direction: str = "all",
+    endpoint: Optional[int | str] = None,
+    timeout: float = 5.0,
+) -> list[dict]:
+    """Return the endpoint/cluster table for one device.
+
+    Local read of the retained inventory (same source as :func:`exposes`), so
+    it costs nothing and needs no device wake-up. Use it to find the exact
+    cluster names ``device read`` / ``device write`` /
+    ``device configure-reporting`` accept, and to see which output clusters
+    are still unbound before calling ``device bind``.
+
+    Returns ``[]`` when the device is unknown or was never interviewed.
+    """
+    if not ident:
+        raise ValueError("ident is required (friendly_name or ieee_address)")
+    if direction not in CLUSTER_DIRECTIONS:
+        raise ValueError(f"direction must be one of {list(CLUSTER_DIRECTIONS)}, got {direction!r}")
+    dev = show(client, ident)
+    if not dev:
+        return []
+    return flatten_endpoint_clusters(dev, direction=direction, endpoint=endpoint)
+
+
+def flatten_reportings(device: dict, *, endpoint: Optional[int | str] = None) -> list[dict]:
+    """Flatten a device record's ``configured_reportings`` into table rows.
+
+    Pure function over a ``bridge/devices`` entry. Each row::
+
+        {"friendly_name", "ieee_address", "endpoint", "cluster", "attribute",
+         "minimum_report_interval", "maximum_report_interval",
+         "reportable_change"}
+
+    z2m stores the attribute either as a plain name or as
+    ``{"ID": 0, "type": 33}`` for manufacturer-specific ids — both are
+    normalised to a string here.
+    """
+    fname = device.get("friendly_name")
+    ieee = device.get("ieee_address")
+    rows: list[dict] = []
+    for ep_num, ep in _iter_endpoints(device):
+        if not _match_endpoint(ep_num, endpoint):
+            continue
+        for rep in ep.get("configured_reportings") or []:
+            if not isinstance(rep, dict):
+                continue
+            attr = rep.get("attribute")
+            if isinstance(attr, dict):
+                attr = attr.get("ID", attr.get("id"))
+            rows.append(
+                {
+                    "friendly_name": fname,
+                    "ieee_address": ieee,
+                    "endpoint": ep_num,
+                    "cluster": rep.get("cluster"),
+                    "attribute": None if attr is None else str(attr),
+                    "minimum_report_interval": rep.get("minimum_report_interval"),
+                    "maximum_report_interval": rep.get("maximum_report_interval"),
+                    "reportable_change": rep.get("reportable_change"),
+                }
+            )
+    return rows
+
+
+def reportings(
+    client: BridgeClient,
+    *,
+    device_ident: Optional[str] = None,
+    endpoint: Optional[int | str] = None,
+    timeout: float = 5.0,
+) -> list[dict]:
+    """List configured attribute reports — for one device or the whole network.
+
+    This is the read-back for :func:`configure_reporting`: after adding a
+    report, run this to confirm z2m recorded it (the bridge response only says
+    the request was accepted). With *device_ident* omitted it sweeps every
+    device, which is the quick way to find sensors that never got reports set
+    up during their interview.
+
+    Rows are sorted by device, endpoint, cluster, attribute.
+    """
+    target_l = device_ident.lower() if device_ident else None
+    out: list[dict] = []
+    for d in list_devices(client, timeout=timeout):
+        if target_l is not None:
+            fname = (d.get("friendly_name") or "").lower()
+            ieee = (d.get("ieee_address") or "").lower()
+            if target_l not in (fname, ieee):
+                continue
+        out.extend(flatten_reportings(d, endpoint=endpoint))
+    out.sort(
+        key=lambda r: (
+            str(r["friendly_name"] or ""),
+            str(r["endpoint"]),
+            str(r["cluster"] or ""),
+            str(r["attribute"] or ""),
+        )
+    )
+    return out
+
+
+def endpoint_summary(client: BridgeClient, ident: str, *, timeout: float = 5.0) -> list[dict]:
+    """One row per endpoint: how many clusters, bindings, reports and scenes.
+
+    The orientation view for a multi-gang switch or multi-endpoint plug —
+    it tells you which ``--endpoint`` to pass to ``device read`` /
+    ``scene store`` before drilling into :func:`clusters`.
+
+    Each row::
+
+        {"endpoint", "input_clusters", "output_clusters", "bindings",
+         "configured_reportings", "scenes", "scene_ids"}
+    """
+    if not ident:
+        raise ValueError("ident is required (friendly_name or ieee_address)")
+    dev = show(client, ident)
+    if not dev:
+        return []
+    rows: list[dict] = []
+    for ep_num, ep in _iter_endpoints(dev):
+        cl = ep.get("clusters") or {}
+        if not isinstance(cl, dict):
+            cl = {}
+        scenes = [s for s in (ep.get("scenes") or []) if isinstance(s, dict)]
+        rows.append(
+            {
+                "endpoint": ep_num,
+                "input_clusters": len(cl.get("input") or []),
+                "output_clusters": len(cl.get("output") or []),
+                "bindings": len(ep.get("bindings") or []),
+                "configured_reportings": len(ep.get("configured_reportings") or []),
+                "scenes": len(scenes),
+                "scene_ids": [s.get("id", s.get("ID")) for s in scenes],
+            }
+        )
+    rows.sort(key=lambda r: str(r["endpoint"]))
+    return rows

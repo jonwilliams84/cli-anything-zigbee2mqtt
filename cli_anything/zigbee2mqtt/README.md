@@ -44,9 +44,16 @@ cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota update 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota unschedule 'Radiator - Master Bedroom'
 
-# Introspect + reachability (both read the retained topics, no device wake-up)
+# Introspect + reachability (all read the retained topics, no device wake-up)
 cli-anything-zigbee2mqtt device exposes 'Lounge Lamp' --settable
+cli-anything-zigbee2mqtt device endpoints 'Lounge Lamp'
+cli-anything-zigbee2mqtt device clusters 'Lounge Lamp' --direction input
+cli-anything-zigbee2mqtt --json device reportings 'Lounge Lamp'
 cli-anything-zigbee2mqtt --json device availability-sweep --offline-only
+
+# Cluster dictionary the running bridge accepts (retained bridge/definitions)
+cli-anything-zigbee2mqtt bridge definitions
+cli-anything-zigbee2mqtt bridge definitions --cluster genOnOff
 
 # Raw ZCL attribute access (answer arrives on the device state topic)
 cli-anything-zigbee2mqtt device read 'Lounge Lamp' --cluster genBasic --attribute zclVersion
@@ -74,8 +81,8 @@ cli-anything-zigbee2mqtt converter remove my-override.js
 
 | Group | Purpose |
 |---|---|
-| `bridge` | info / state / restart / health / options-get / options-set / watch-events / watch-logging |
-| `device` | list / show / rename / remove / configure / interview / options / set / get / watch |
+| `bridge` | info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging |
+| `device` | list / show / rename / remove / configure / interview / options / set / get / watch / exposes / endpoints / clusters / reportings / read / write / bind / unbind / bindings |
 | `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state |
 | `scene` | list / store / recall / add / rename / remove / remove-all (Zigbee scenes on a device or group) |
 | `ota` | check / update / schedule |
@@ -93,8 +100,9 @@ cli_anything/zigbee2mqtt/
 ├── zigbee2mqtt_cli.py      # Click CLI + REPL
 ├── core/
 │   ├── mqtt_client.py      # BridgeClient — request/response over MQTT
-│   ├── bridge.py           # bridge info/state/restart/health/options/watch
+│   ├── bridge.py           # bridge info/state/restart/health/options/watch/definitions
 │   ├── devices.py          # list/show/rename/remove/configure/interview/set/get
+│   │                       # + exposes / endpoints / clusters / reportings introspection
 │   ├── groups.py           # group CRUD + membership + groupcast set/get/state
 │   ├── scenes.py           # scene store/recall/add/remove/rename + list
 │   ├── ota.py              # OTA check / update / schedule

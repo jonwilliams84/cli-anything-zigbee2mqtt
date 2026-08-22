@@ -2377,3 +2377,456 @@ class TestRefineWorkflows:
             )
             assert detail.exit_code == 0, detail.output
             assert json.loads(detail.output)["ieee_address"] == "0xbbb"
+
+
+# ── endpoint / cluster introspection commands ────────────────────────────────
+
+CLUSTER_INVENTORY = json.dumps(
+    [
+        {
+            "friendly_name": "plug1",
+            "ieee_address": "0xaaa",
+            "type": "Router",
+            "endpoints": {
+                "1": {
+                    "clusters": {
+                        "input": ["genBasic", "genOnOff", "haElectricalMeasurement"],
+                        "output": ["genOta"],
+                    },
+                    "bindings": [
+                        {
+                            "cluster": "genOnOff",
+                            "target": {"type": "endpoint", "ieee_address": "0xcoord"},
+                        }
+                    ],
+                    "configured_reportings": [
+                        {
+                            "cluster": "genOnOff",
+                            "attribute": "onOff",
+                            "minimum_report_interval": 0,
+                            "maximum_report_interval": 3600,
+                            "reportable_change": 0,
+                        }
+                    ],
+                    "scenes": [{"id": 3, "name": "movie"}],
+                },
+                "2": {"clusters": {"input": ["genOnOff"], "output": []}},
+            },
+        },
+        {"friendly_name": "sensor1", "ieee_address": "0xbbb", "type": "EndDevice"},
+    ]
+)
+
+
+class TestDeviceClustersCommand:
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", CLUSTER_INVENTORY)
+        return client
+
+    def test_clusters_json_lists_every_endpoint(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "clusters", "plug1"]
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert len(rows) == 5
+        assert {r["endpoint"] for r in rows} == {1, 2}
+
+    def test_clusters_marks_bound_and_reported(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "clusters", "0xaaa"]
+            )
+        rows = {(r["endpoint"], r["cluster"]): r for r in json.loads(result.output)}
+        assert rows[(1, "genOnOff")]["bound"] is True
+        assert rows[(1, "genOnOff")]["reported"] is True
+        assert rows[(2, "genOnOff")]["bound"] is False
+
+    def test_clusters_direction_and_endpoint_filters(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "clusters",
+                    "plug1",
+                    "--direction",
+                    "output",
+                    "--endpoint",
+                    "1",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert [r["cluster"] for r in json.loads(result.output)] == ["genOta"]
+
+    def test_clusters_table_output(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "clusters", "plug1"])
+        assert result.exit_code == 0, result.output
+        assert "haElectricalMeasurement" in result.output
+        assert "direction" in result.output
+
+    def test_clusters_bad_direction_rejected_by_click(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "device", "clusters", "plug1", "--direction", "sideways"]
+            )
+        assert result.exit_code == 2
+
+    def test_clusters_unknown_device_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "clusters", "ghost"])
+        assert result.exit_code != 0
+        assert "no clusters" in result.output
+
+    def test_clusters_uninterviewed_device_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "clusters", "sensor1"])
+        assert result.exit_code != 0
+
+
+class TestDeviceEndpointsCommand:
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", CLUSTER_INVENTORY)
+        return client
+
+    def test_endpoints_summary_json(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "endpoints", "plug1"]
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [r["endpoint"] for r in rows] == [1, 2]
+        assert rows[0]["input_clusters"] == 3
+        assert rows[0]["bindings"] == 1
+        assert rows[0]["configured_reportings"] == 1
+        assert rows[0]["scene_ids"] == [3]
+
+    def test_endpoints_table_output(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "endpoints", "plug1"])
+        assert result.exit_code == 0, result.output
+        assert "input_clusters" in result.output
+
+    def test_endpoints_unknown_device_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "endpoints", "ghost"])
+        assert result.exit_code != 0
+        assert "no endpoints" in result.output
+
+
+class TestDeviceReportingsCommand:
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", CLUSTER_INVENTORY)
+        return client
+
+    def test_reportings_all_devices(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "--json", "device", "reportings"])
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert len(rows) == 1
+        assert rows[0]["friendly_name"] == "plug1"
+        assert rows[0]["attribute"] == "onOff"
+        assert rows[0]["maximum_report_interval"] == 3600
+
+    def test_reportings_filtered_by_device(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "reportings", "sensor1"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == []
+
+    def test_reportings_endpoint_filter(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "device", "reportings", "plug1", "--endpoint", "2"],
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == []
+
+    def test_reportings_table_output(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "reportings"])
+        assert result.exit_code == 0, result.output
+        assert "onOff" in result.output
+
+
+DEFINITIONS_PAYLOAD = json.dumps(
+    {
+        "clusters": {
+            "genBasic": {
+                "ID": 0,
+                "attributes": {"zclVersion": {"ID": 0, "type": 32}},
+                "commands": {},
+                "commandsResponse": {},
+            },
+            "genOnOff": {
+                "ID": 6,
+                "attributes": {
+                    "onOff": {"ID": 0, "type": 16},
+                    "startUpOnOff": {"ID": 16387, "type": 48},
+                },
+                "commands": {"off": {"ID": 0, "parameters": []}, "on": {"ID": 1}},
+                "commandsResponse": {},
+            },
+            "emptyCluster": {"ID": 99},
+        },
+        "custom_clusters": {
+            "0xdead": {"tuyaSpecific": {"ID": 61184, "attributes": {"dp": {"ID": 1}}}}
+        },
+    }
+)
+
+
+class TestBridgeDefinitionsCommand:
+    def _client(self, payload=DEFINITIONS_PAYLOAD):
+        client = SubscribingFakeClient()
+        if payload is not None:
+            client.set_retained("zigbee2mqtt/bridge/definitions", payload)
+        return client
+
+    def test_definitions_lists_clusters(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "--json", "bridge", "definitions"])
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [r["cluster"] for r in rows] == ["genBasic", "genOnOff", "emptyCluster"]
+        assert rows[1]["attributes"] == 2
+
+    def test_definitions_table_output(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "bridge", "definitions"])
+        assert result.exit_code == 0, result.output
+        assert "genOnOff" in result.output
+
+    def test_definitions_cluster_attributes(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "bridge", "definitions", "--cluster", "genOnOff"],
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [r["attribute"] for r in rows] == ["onOff", "startUpOnOff"]
+
+    def test_definitions_cluster_by_numeric_id(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "bridge", "definitions", "--cluster", "0x0006"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)[0]["cluster"] == "genOnOff"
+
+    def test_definitions_cluster_commands(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "bridge",
+                    "definitions",
+                    "--cluster",
+                    "genOnOff",
+                    "--commands",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert [r["command"] for r in json.loads(result.output)] == ["off", "on"]
+
+    def test_definitions_commands_without_cluster_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "bridge", "definitions", "--commands"]
+            )
+        assert result.exit_code != 0
+        assert "--commands requires --cluster" in result.output
+
+    def test_definitions_unknown_cluster_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "bridge", "definitions", "--cluster", "genNope"]
+            )
+        assert result.exit_code != 0
+        assert "unknown cluster" in result.output
+
+    def test_definitions_cluster_without_attributes_errors(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "bridge", "definitions", "--cluster", "emptyCluster"]
+            )
+        assert result.exit_code != 0
+        assert "no attributes" in result.output
+
+    def test_definitions_custom_clusters(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "bridge", "definitions", "--custom"]
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert rows[0]["cluster"] == "tuyaSpecific"
+        assert rows[0]["ieee_address"] == "0xdead"
+
+    def test_definitions_no_custom_clusters_errors(self):
+        payload = json.dumps({"clusters": {"genBasic": {"ID": 0}}})
+        with _patched(self._client(payload)):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "bridge", "definitions", "--custom"]
+            )
+        assert result.exit_code != 0
+        assert "no custom clusters" in result.output
+
+    def test_definitions_missing_topic_errors(self):
+        with _patched(self._client(None)):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "bridge", "definitions"])
+        assert result.exit_code != 0
+        assert "no retained bridge/definitions" in result.output
+
+
+class TestClusterIntrospectionWorkflows:
+    """New introspection commands feeding the raw-cluster commands."""
+
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", CLUSTER_INVENTORY)
+        client.set_retained("zigbee2mqtt/bridge/definitions", DEFINITIONS_PAYLOAD)
+        return client
+
+    def test_endpoints_then_clusters_then_read(self):
+        client = self._client()
+        with _patched(client):
+            r = _runner()
+            eps = r.invoke(cli, ["--mqtt-host", "x", "--json", "device", "endpoints", "plug1"])
+            assert eps.exit_code == 0, eps.output
+            endpoint = json.loads(eps.output)[0]["endpoint"]
+
+            cl = r.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "clusters",
+                    "plug1",
+                    "--endpoint",
+                    str(endpoint),
+                    "--direction",
+                    "input",
+                ],
+            )
+            assert cl.exit_code == 0, cl.output
+            cluster = json.loads(cl.output)[1]["cluster"]
+            assert cluster == "genOnOff"
+
+            attrs = r.invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "bridge", "definitions", "--cluster", cluster],
+            )
+            assert attrs.exit_code == 0, attrs.output
+            attribute = json.loads(attrs.output)[0]["attribute"]
+
+            read = r.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "read",
+                    "plug1",
+                    "--cluster",
+                    cluster,
+                    "--attribute",
+                    attribute,
+                    "--endpoint",
+                    str(endpoint),
+                ],
+            )
+            assert read.exit_code == 0, read.output
+            topic, payload = client.last_published
+            assert topic == "zigbee2mqtt/plug1/1/set"
+            assert payload == {"read": {"cluster": "genOnOff", "attributes": ["onOff"]}}
+
+    def test_clusters_finds_unbound_output_cluster_then_binds(self):
+        client = self._client()
+        client.set_response("device/bind", {"status": "ok", "data": {"clusters": ["genOnOff"]}})
+        with _patched(client):
+            r = _runner()
+            out = r.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "clusters",
+                    "plug1",
+                    "--direction",
+                    "output",
+                ],
+            )
+            assert out.exit_code == 0, out.output
+            unbound = [row for row in json.loads(out.output) if not row["bound"]]
+            assert [row["cluster"] for row in unbound] == ["genOta"]
+
+            bind = r.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "bind",
+                    "plug1/1",
+                    "sensor1",
+                    "--cluster",
+                    "genOnOff",
+                ],
+            )
+            assert bind.exit_code == 0, bind.output
+            assert json.loads(bind.output)["status"] == "ok"
+
+    def test_configure_reporting_then_read_back(self):
+        client = self._client()
+        client.set_response("device/configure_reporting", {"status": "ok"})
+        with _patched(client):
+            r = _runner()
+            conf = r.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "configure-reporting",
+                    "plug1",
+                    "--cluster",
+                    "genOnOff",
+                    "--attribute",
+                    "onOff",
+                    "--min",
+                    "0",
+                    "--max",
+                    "3600",
+                ],
+            )
+            assert conf.exit_code == 0, conf.output
+            back = r.invoke(cli, ["--mqtt-host", "x", "--json", "device", "reportings", "plug1"])
+            assert back.exit_code == 0, back.output
+            rows = json.loads(back.output)
+            assert rows[0]["cluster"] == "genOnOff"
+            assert rows[0]["attribute"] == "onOff"
