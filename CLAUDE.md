@@ -6,7 +6,7 @@ OTA, network admin, bindings, install-codes, external converters, and extensions
 of `cli-anything-homeassistant`. Python 3.10+, Click + paho-mqtt.
 
 ## Layout
-- `cli_anything/zigbee2mqtt/zigbee2mqtt_cli.py` — Click CLI + REPL (entry point `main`); 1,400+ lines, all command wiring.
+- `cli_anything/zigbee2mqtt/zigbee2mqtt_cli.py` — Click CLI + REPL (entry point `main`); 1,700+ lines, all command wiring.
 - `cli_anything/zigbee2mqtt/core/` — one module per command group: `mqtt_client.py` (`BridgeClient`, request/response correlation), `bridge.py`, `devices.py` (incl. `exposes` introspection + availability sweep), `attributes.py` (raw ZCL cluster read/write), `bindings.py`, `groups.py` (CRUD + groupcast set/get/state), `scenes.py` (Zigbee scene store/recall/add/rename/remove), `ota.py`, `admin.py`, `converters.py`, `extensions.py`, `install_code.py`, `k8s_backend.py` (kubectl helpers), `project.py` (local profile).
 - `cli_anything/zigbee2mqtt/tests/` — `test_core.py`, `test_refine.py`, `test_full_e2e.py` (CliRunner end-to-end), plus focused regression/coverage suites. Run against a fake MQTT transport; no broker needed.
 - `cli_anything/zigbee2mqtt/skills/SKILL.md` and `skills/cli-anything-zigbee2mqtt/SKILL.md` — agent-facing skill docs (keep in sync with CLI changes).
@@ -35,8 +35,14 @@ No lint/CI config present. No release automation — version is hand-bumped in `
   (`device state` / `group state` / `scene list`). Keep that read-back path working when
   touching `core/scenes.py` or `core/attributes.py`.
 - Read-only introspection prefers the retained `bridge/devices` payload over a round trip:
-  `device exposes`, `device bindings`, `device stale` and `device availability-sweep` all
-  derive from it locally, so they work against a sleeping battery device.
+  `device exposes`, `device endpoints`, `device clusters`, `device reportings`,
+  `device bindings`, `device stale` and `device availability-sweep` all
+  derive from it locally, so they work against a sleeping battery device. `bridge definitions`
+  does the same against the retained `bridge/definitions` cluster dictionary (z2m 1.35+) —
+  the source of the cluster/attribute names `device read`/`write`/`configure-reporting` accept.
+  Keep the pure helpers (`devices.flatten_endpoint_clusters`, `devices.flatten_reportings`,
+  `bridge.summarize_clusters`/`cluster_attributes`/`cluster_commands`) client-free so they
+  stay unit-testable without a transport.
 - Every command supports `--json` for machine-readable output.
 
 ## Conventions / gotchas

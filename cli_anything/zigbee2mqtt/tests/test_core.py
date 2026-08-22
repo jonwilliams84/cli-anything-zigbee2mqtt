@@ -2052,3 +2052,444 @@ class TestRefineEdgeCases:
         rows = devices_core.availability_sweep(c, duration=5)
         assert [r["friendly_name"] for r in rows] == ["lamp"]
         assert rows[0]["online"] is True
+
+
+# ── endpoint / cluster introspection ────────────────────────────────────────
+
+
+class _InventoryClient(FakeBridgeClientForBridge):
+    """Retained-only client seeded with a bridge/devices inventory."""
+
+    def __init__(self, devices):
+        super().__init__()
+        self.set_retained("zigbee2mqtt/bridge/devices", json.dumps(devices))
+
+
+#: A two-endpoint plug: ep1 has reports + a binding, ep2 is bare.
+PLUG = {
+    "friendly_name": "Plug",
+    "ieee_address": "0xplug",
+    "type": "Router",
+    "endpoints": {
+        "1": {
+            "clusters": {
+                "input": ["genOnOff", "genBasic", "haElectricalMeasurement"],
+                "output": ["genOta"],
+            },
+            "bindings": [
+                {"cluster": "genOnOff", "target": {"type": "endpoint", "ieee_address": "0xco"}}
+            ],
+            "configured_reportings": [
+                {
+                    "cluster": "genOnOff",
+                    "attribute": "onOff",
+                    "minimum_report_interval": 0,
+                    "maximum_report_interval": 3600,
+                    "reportable_change": 0,
+                },
+                {
+                    "cluster": "haElectricalMeasurement",
+                    "attribute": {"ID": 1291, "type": 33},
+                    "minimum_report_interval": 5,
+                    "maximum_report_interval": 3600,
+                    "reportable_change": 10,
+                },
+            ],
+            "scenes": [{"id": 1, "name": "evening"}],
+        },
+        "2": {"clusters": {"input": ["genOnOff"], "output": []}},
+    },
+}
+
+
+class TestFlattenEndpointClusters:
+    def test_rows_cover_input_and_output(self):
+        rows = devices_core.flatten_endpoint_clusters(PLUG)
+        assert len(rows) == 5
+        assert {r["cluster"] for r in rows if r["endpoint"] == 1} == {
+            "genOnOff",
+            "genBasic",
+            "haElectricalMeasurement",
+            "genOta",
+        }
+
+    def test_input_before_output_and_sorted(self):
+        rows = [r for r in devices_core.flatten_endpoint_clusters(PLUG) if r["endpoint"] == 1]
+        assert [r["direction"] for r in rows] == ["input", "input", "input", "output"]
+        assert [r["cluster"] for r in rows[:3]] == [
+            "genBasic",
+            "genOnOff",
+            "haElectricalMeasurement",
+        ]
+
+    def test_bound_and_reported_flags(self):
+        rows = devices_core.flatten_endpoint_clusters(PLUG, direction="input")
+        by_key = {(r["endpoint"], r["cluster"]): r for r in rows}
+        assert by_key[(1, "genOnOff")]["bound"] is True
+        assert by_key[(1, "genOnOff")]["reported"] is True
+        assert by_key[(1, "genBasic")]["bound"] is False
+        assert by_key[(2, "genOnOff")]["bound"] is False
+
+    def test_direction_filter(self):
+        rows = devices_core.flatten_endpoint_clusters(PLUG, direction="output")
+        assert [r["cluster"] for r in rows] == ["genOta"]
+
+    def test_endpoint_filter_accepts_str_or_int(self):
+        for wanted in (2, "2"):
+            rows = devices_core.flatten_endpoint_clusters(PLUG, endpoint=wanted)
+            assert {r["endpoint"] for r in rows} == {2}
+
+    def test_bad_direction_raises(self):
+        with pytest.raises(ValueError, match="direction"):
+            devices_core.flatten_endpoint_clusters(PLUG, direction="sideways")
+
+    def test_missing_or_malformed_endpoints(self):
+        assert devices_core.flatten_endpoint_clusters({}) == []
+        assert devices_core.flatten_endpoint_clusters({"endpoints": []}) == []
+        assert devices_core.flatten_endpoint_clusters({"endpoints": {"1": "nope"}}) == []
+        assert devices_core.flatten_endpoint_clusters({"endpoints": {"1": {}}}) == []
+
+    def test_non_numeric_endpoint_key_survives(self):
+        rows = devices_core.flatten_endpoint_clusters(
+            {"endpoints": {"green": {"clusters": {"input": ["genBasic"]}}}}
+        )
+        assert rows[0]["endpoint"] == "green"
+
+    def test_malformed_cluster_block_is_skipped(self):
+        rows = devices_core.flatten_endpoint_clusters(
+            {"endpoints": {"1": {"clusters": {"input": "genOnOff"}}}}
+        )
+        assert rows == []
+
+
+class TestClusters:
+    def test_lookup_by_friendly_name(self):
+        c = _InventoryClient([PLUG])
+        rows = devices_core.clusters(c, "Plug")
+        assert len(rows) == 5
+
+    def test_lookup_by_ieee_and_endpoint(self):
+        c = _InventoryClient([PLUG])
+        rows = devices_core.clusters(c, "0xplug", endpoint=1, direction="output")
+        assert [r["cluster"] for r in rows] == ["genOta"]
+
+    def test_unknown_device_returns_empty(self):
+        c = _InventoryClient([PLUG])
+        assert devices_core.clusters(c, "ghost") == []
+
+    def test_blank_ident_raises(self):
+        c = _InventoryClient([PLUG])
+        with pytest.raises(ValueError, match="ident is required"):
+            devices_core.clusters(c, "")
+
+    def test_bad_direction_raises_before_lookup(self):
+        c = _InventoryClient([PLUG])
+        with pytest.raises(ValueError, match="direction"):
+            devices_core.clusters(c, "Plug", direction="nope")
+
+
+class TestReportings:
+    def test_flatten_normalises_dict_attribute(self):
+        rows = devices_core.flatten_reportings(PLUG)
+        assert [r["attribute"] for r in rows] == ["onOff", "1291"]
+        assert rows[0]["friendly_name"] == "Plug"
+        assert rows[1]["reportable_change"] == 10
+
+    def test_flatten_endpoint_filter(self):
+        assert devices_core.flatten_reportings(PLUG, endpoint=2) == []
+
+    def test_flatten_skips_non_dict_rows(self):
+        rows = devices_core.flatten_reportings(
+            {"endpoints": {"1": {"configured_reportings": ["junk", None]}}}
+        )
+        assert rows == []
+
+    def test_sweep_all_devices_sorted(self):
+        other = {
+            "friendly_name": "Aaa Sensor",
+            "ieee_address": "0xaaa",
+            "endpoints": {
+                "1": {
+                    "configured_reportings": [
+                        {
+                            "cluster": "msTemperatureMeasurement",
+                            "attribute": "measuredValue",
+                            "minimum_report_interval": 10,
+                            "maximum_report_interval": 300,
+                        }
+                    ]
+                }
+            },
+        }
+        c = _InventoryClient([PLUG, other])
+        rows = devices_core.reportings(c)
+        assert [r["friendly_name"] for r in rows] == ["Aaa Sensor", "Plug", "Plug"]
+
+    def test_filter_by_device(self):
+        c = _InventoryClient([PLUG])
+        assert len(devices_core.reportings(c, device_ident="0xPLUG")) == 2
+        assert devices_core.reportings(c, device_ident="ghost") == []
+
+    def test_device_with_no_reports(self):
+        c = _InventoryClient([{"friendly_name": "bare", "ieee_address": "0xb"}])
+        assert devices_core.reportings(c) == []
+
+
+class TestEndpointSummary:
+    def test_counts_per_endpoint(self):
+        c = _InventoryClient([PLUG])
+        rows = devices_core.endpoint_summary(c, "Plug")
+        assert [r["endpoint"] for r in rows] == [1, 2]
+        first = rows[0]
+        assert first["input_clusters"] == 3
+        assert first["output_clusters"] == 1
+        assert first["bindings"] == 1
+        assert first["configured_reportings"] == 2
+        assert first["scenes"] == 1
+        assert first["scene_ids"] == [1]
+        assert rows[1]["scenes"] == 0
+
+    def test_unknown_device_returns_empty(self):
+        c = _InventoryClient([PLUG])
+        assert devices_core.endpoint_summary(c, "ghost") == []
+
+    def test_blank_ident_raises(self):
+        c = _InventoryClient([PLUG])
+        with pytest.raises(ValueError, match="ident is required"):
+            devices_core.endpoint_summary(c, "")
+
+
+# ── bridge/definitions cluster dictionary ───────────────────────────────────
+
+
+DEFS = {
+    "clusters": {
+        "genOnOff": {
+            "ID": 6,
+            "attributes": {
+                "onOff": {"ID": 0, "type": 16},
+                "startUpOnOff": {"ID": 16387, "type": 48},
+            },
+            "commands": {
+                "off": {"ID": 0, "parameters": []},
+                "on": {"ID": 1, "parameters": []},
+            },
+            "commandsResponse": {},
+        },
+        "genBasic": {
+            "ID": 0,
+            "attributes": {"zclVersion": {"ID": 0, "type": 32}},
+            "commands": {},
+            "commandsResponse": {"reset": {"ID": 0}},
+        },
+        "manuSpecific": {
+            "ID": 64512,
+            "attributes": {
+                "magic": {"ID": 1, "type": 32, "manufacturerCode": 4098},
+            },
+            "commands": {"poke": {"ID": 2, "parameters": [{"name": "value", "type": 32}, "bad"]}},
+        },
+    },
+    "custom_clusters": {
+        "0xdead": {"tuyaSpecific": {"ID": 61184, "attributes": {"dp": {"ID": 1}}, "commands": {}}},
+        "0xbeef": "not-a-dict",
+    },
+}
+
+
+def _defs_client(payload=DEFS):
+    c = FakeBridgeClientForBridge()
+    if payload is not None:
+        c.set_retained("zigbee2mqtt/bridge/definitions", json.dumps(payload))
+    return c
+
+
+class TestBridgeDefinitions:
+    def test_definitions_parses_retained(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        defs = bridge_core.definitions(_defs_client())
+        assert set(defs["clusters"]) == {"genOnOff", "genBasic", "manuSpecific"}
+
+    def test_definitions_missing_topic(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        assert bridge_core.definitions(_defs_client(None)) == {}
+
+    def test_definitions_malformed_json_returns_raw(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        c = FakeBridgeClientForBridge()
+        c.set_retained("zigbee2mqtt/bridge/definitions", "{{{")
+        assert bridge_core.definitions(c)["raw"] == "{{{"
+
+    def test_definitions_non_object_payload(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        c = FakeBridgeClientForBridge()
+        c.set_retained("zigbee2mqtt/bridge/definitions", "[1, 2]")
+        assert bridge_core.definitions(c) == {}
+
+    def test_summarize_sorted_by_id_with_counts(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        rows = bridge_core.summarize_clusters(DEFS)
+        assert [r["cluster"] for r in rows] == ["genBasic", "genOnOff", "manuSpecific"]
+        on_off = rows[1]
+        assert on_off["id"] == 6
+        assert on_off["attributes"] == 2
+        assert on_off["commands"] == 2
+        assert on_off["commands_response"] == 0
+        assert rows[0]["commands_response"] == 1
+
+    def test_summarize_handles_empty_and_malformed(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        assert bridge_core.summarize_clusters({}) == []
+        assert bridge_core.summarize_clusters({"clusters": "nope"}) == []
+        rows = bridge_core.summarize_clusters({"clusters": {"weird": "nope"}})
+        assert rows == [
+            {
+                "cluster": "weird",
+                "id": None,
+                "attributes": 0,
+                "commands": 0,
+                "commands_response": 0,
+            }
+        ]
+
+    def test_find_cluster_by_name_case_insensitive(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        found = bridge_core.find_cluster(DEFS, "GENONOFF")
+        assert found["cluster"] == "genOnOff"
+        assert found["id"] == 6
+
+    def test_find_cluster_by_decimal_and_hex_id(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        assert bridge_core.find_cluster(DEFS, "6")["cluster"] == "genOnOff"
+        assert bridge_core.find_cluster(DEFS, "0x0006")["cluster"] == "genOnOff"
+
+    def test_find_cluster_unknown_returns_none(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        assert bridge_core.find_cluster(DEFS, "genNope") is None
+
+    def test_find_cluster_blank_raises(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        with pytest.raises(ValueError, match="cluster is required"):
+            bridge_core.find_cluster(DEFS, "  ")
+
+    def test_cluster_attributes_rows(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        rows = bridge_core.cluster_attributes(DEFS, "genOnOff")
+        assert [r["attribute"] for r in rows] == ["onOff", "startUpOnOff"]
+        assert rows[0]["cluster"] == "genOnOff"
+        assert rows[0]["type"] == 16
+        assert rows[0]["manufacturer_code"] is None
+
+    def test_cluster_attributes_manufacturer_code(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        rows = bridge_core.cluster_attributes(DEFS, 64512)
+        assert rows[0]["manufacturer_code"] == 4098
+
+    def test_cluster_attributes_unknown_cluster(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        assert bridge_core.cluster_attributes(DEFS, "genNope") == []
+
+    def test_cluster_commands_requests_before_responses(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        rows = bridge_core.cluster_commands(DEFS, "genOnOff")
+        assert [r["command"] for r in rows] == ["off", "on"]
+        assert {r["direction"] for r in rows} == {"request"}
+
+        rows = bridge_core.cluster_commands(DEFS, "genBasic")
+        assert rows[0]["direction"] == "response"
+
+    def test_cluster_commands_parameter_names(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        rows = bridge_core.cluster_commands(DEFS, "manuSpecific")
+        assert rows[0]["parameters"] == ["value"]
+
+    def test_cluster_commands_unknown_cluster(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        assert bridge_core.cluster_commands(DEFS, "genNope") == []
+
+    def test_custom_clusters_flattened(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        rows = bridge_core.custom_clusters(DEFS)
+        assert rows == [
+            {
+                "ieee_address": "0xdead",
+                "cluster": "tuyaSpecific",
+                "id": 61184,
+                "attributes": 1,
+                "commands": 0,
+            }
+        ]
+
+    def test_custom_clusters_absent(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        assert bridge_core.custom_clusters({}) == []
+        assert bridge_core.custom_clusters({"custom_clusters": []}) == []
+
+    def test_cluster_attributes_malformed_block(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        defs = {"clusters": {"weird": {"ID": 1, "attributes": "nope"}}}
+        assert bridge_core.cluster_attributes(defs, "weird") == []
+
+    def test_cluster_attributes_malformed_entry(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        defs = {"clusters": {"weird": {"ID": 1, "attributes": {"a": "nope"}}}}
+        rows = bridge_core.cluster_attributes(defs, "weird")
+        assert rows == [
+            {
+                "cluster": "weird",
+                "attribute": "a",
+                "id": None,
+                "type": None,
+                "manufacturer_code": None,
+            }
+        ]
+
+    def test_cluster_commands_malformed_block(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        defs = {"clusters": {"weird": {"ID": 1, "commands": "nope"}}}
+        assert bridge_core.cluster_commands(defs, "weird") == []
+
+
+class TestEndpointSummaryEdgeCases:
+    def test_malformed_cluster_block_counts_zero(self):
+        c = _InventoryClient(
+            [
+                {
+                    "friendly_name": "odd",
+                    "ieee_address": "0xo",
+                    "endpoints": {"1": {"clusters": ["genOnOff"]}},
+                }
+            ]
+        )
+        rows = devices_core.endpoint_summary(c, "odd")
+        assert rows[0]["input_clusters"] == 0
+        assert rows[0]["output_clusters"] == 0
+
+    def test_non_dict_scene_entries_ignored(self):
+        c = _InventoryClient(
+            [{"friendly_name": "odd", "ieee_address": "0xo", "endpoints": {"1": {"scenes": [7]}}}]
+        )
+        rows = devices_core.endpoint_summary(c, "odd")
+        assert rows[0]["scenes"] == 0
+        assert rows[0]["scene_ids"] == []

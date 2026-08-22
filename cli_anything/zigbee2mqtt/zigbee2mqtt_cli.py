@@ -408,6 +408,72 @@ def bridge_log_level(ctx, level):
             emit(ctx, bridge_core.get_log_level(c))
 
 
+@bridge.command("definitions")
+@click.option(
+    "--cluster",
+    default=None,
+    help="Drill into one cluster by name or numeric id (genOnOff / 6 / 0x0006).",
+)
+@click.option(
+    "--commands",
+    is_flag=True,
+    default=False,
+    help="With --cluster: list commands instead of attributes.",
+)
+@click.option("--custom", is_flag=True, default=False, help="List manufacturer custom clusters.")
+@click.option(
+    "--timeout",
+    default=5.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for the retained payload.",
+)
+@click.pass_context
+def bridge_definitions(ctx, cluster, commands, custom, timeout):
+    """Cluster dictionary z2m is running with (retained `bridge/definitions`).
+
+    The authoritative source of the cluster/attribute names `device read`,
+    `device write` and `device configure-reporting` accept — including
+    manufacturer clusters added by external converters (`--custom`).
+
+    No arguments: one row per cluster. `--cluster genOnOff`: its attributes
+    (add `--commands` for its commands instead).
+    """
+    if commands and not cluster:
+        _abort("--commands requires --cluster")
+    with make_client(ctx) as c:
+        defs = bridge_core.definitions(c, timeout=timeout)
+    if not defs:
+        _abort(
+            "no retained bridge/definitions payload (needs zigbee2mqtt 1.35+; check --base-topic)"
+        )
+    if custom:
+        rows = bridge_core.custom_clusters(defs)
+        if not rows:
+            _abort("no custom clusters defined")
+        emit(ctx, rows)
+        return
+    if cluster:
+        try:
+            found = bridge_core.find_cluster(defs, cluster)
+        except ValueError as exc:
+            _abort(str(exc))
+            return
+        if not found:
+            _abort(f"unknown cluster {cluster!r} (run `bridge definitions` for the full list)")
+        rows = (
+            bridge_core.cluster_commands(defs, cluster)
+            if commands
+            else bridge_core.cluster_attributes(defs, cluster)
+        )
+        if not rows:
+            kind = "commands" if commands else "attributes"
+            _abort(f"cluster {found['cluster']!r} defines no {kind}")
+        emit(ctx, rows)
+        return
+    emit(ctx, bridge_core.summarize_clusters(defs))
+
+
 # ──────────────────────────────────────────────────────── devices
 
 
@@ -827,6 +893,67 @@ def device_exposes(ctx, ident, settable):
     if not rows:
         _abort(f"no exposed properties for {ident!r} (unknown device or no definition)")
     emit(ctx, rows)
+
+
+@device.command("clusters")
+@click.argument("ident")
+@click.option(
+    "--direction",
+    type=click.Choice(list(devices_core.CLUSTER_DIRECTIONS)),
+    default="all",
+    show_default=True,
+    help="input = clusters you can read/write, output = clusters you can bind away.",
+)
+@click.option("--endpoint", default=None, help="Only this endpoint id.")
+@click.pass_context
+def device_clusters(ctx, ident, direction, endpoint):
+    """List a device's endpoints and their Zigbee clusters.
+
+    Read locally from the retained device inventory — no round trip, works on
+    a sleeping battery device. Use it to find the cluster names `device read`,
+    `device write` and `device configure-reporting` accept, and to spot output
+    clusters that are not bound yet (`bound` column) before `device bind`.
+    """
+    with make_client(ctx) as c:
+        rows = devices_core.clusters(c, ident, direction=direction, endpoint=endpoint)
+    if not rows:
+        _abort(
+            f"no clusters for {ident!r} "
+            "(unknown device, endpoint filter too narrow, or never interviewed)"
+        )
+    emit(ctx, rows)
+
+
+@device.command("endpoints")
+@click.argument("ident")
+@click.pass_context
+def device_endpoints(ctx, ident):
+    """Summarise a device's endpoints (cluster / binding / report / scene counts).
+
+    The orientation view for multi-gang switches and multi-outlet plugs: it
+    tells you which `--endpoint` to pass to `device read`, `device write` or
+    `scene store` before drilling in with `device clusters`.
+    """
+    with make_client(ctx) as c:
+        rows = devices_core.endpoint_summary(c, ident)
+    if not rows:
+        _abort(f"no endpoints for {ident!r} (unknown device or never interviewed)")
+    emit(ctx, rows)
+
+
+@device.command("reportings")
+@click.argument("ident", required=False, default=None)
+@click.option("--endpoint", default=None, help="Only this endpoint id.")
+@click.pass_context
+def device_reportings(ctx, ident, endpoint):
+    """List configured attribute reports (all devices, or just IDENT).
+
+    The read-back for `device configure-reporting`: the bridge response only
+    confirms the request was accepted, this shows what z2m actually recorded.
+    Computed locally from the retained `bridge/devices` payload.
+    """
+    with make_client(ctx) as c:
+        emit(ctx, devices_core.reportings(c, device_ident=ident, endpoint=endpoint))
 
 
 @device.command("availability")
