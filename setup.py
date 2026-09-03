@@ -5,7 +5,7 @@ with open("cli_anything/zigbee2mqtt/README.md") as f:
 
 setup(
     name="cli-anything-zigbee2mqtt",
-    version="0.1.0",
+    version="0.1.1",
     description="CLI harness for Zigbee2MQTT — bridge control, device management, OTA, external converters from the command line",
     long_description=long_description,
     long_description_content_type="text/markdown",
