@@ -278,6 +278,13 @@ configure_reporting), and multi-command workflows (create group → add member �
 groupcast set → store/recall scene; `device exposes` → `device set`; raw
 `device read` → `device state` read-back). No broker and no kubectl needed.
 
+## Releases
+
+Every change merged to `main` is tagged and published as a semver GitHub Release
+(`vMAJOR.MINOR.PATCH`) by the Release workflow. The version of record is the
+`version=` field in `setup.py`. `CHANGELOG.md` carries a section per released
+version with a summary of what changed.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
