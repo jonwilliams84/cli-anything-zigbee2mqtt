@@ -41,7 +41,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state` |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
-| `ota` | `check / update / schedule / unschedule` |
+| `ota` | `check [name \| --all] / update / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup` |
 | `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `list / show / add / remove` — manages `data/external_converters/*.js` via kubectl |
@@ -71,6 +71,8 @@ cli-anything-zigbee2mqtt device get 'Lounge Lamp' state brightness
 
 # OTA
 cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom'
+cli-anything-zigbee2mqtt --json ota check --all          # whole-network firmware sweep
+cli-anything-zigbee2mqtt --json ota check --all --with-update   # only pending updates
 cli-anything-zigbee2mqtt ota update 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota schedule 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota unschedule 'Radiator - Master Bedroom'   # back out
@@ -244,6 +246,7 @@ cli_anything/zigbee2mqtt/
 │   │                       # + set_state / get_state / read_state (groupcast control)
 │   ├── scenes.py           # scene store/recall/add/remove/remove_all/rename + list
 │   ├── ota.py              # OTA check / update / schedule / unschedule
+│   │                       # + check_all (whole-network firmware sweep)
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
 │   ├── converters.py       # external_converters/ file mgmt (kubectl)
 │   ├── extensions.py       # extension save/remove/list/show (MQTT)

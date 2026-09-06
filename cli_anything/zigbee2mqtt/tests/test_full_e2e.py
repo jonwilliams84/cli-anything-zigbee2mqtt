@@ -1008,6 +1008,175 @@ class TestOtaCommands:
             assert result.exit_code == 0, result.output
 
 
+# ── ota check --all (network firmware sweep) ─────────────────────────────────
+
+
+class _SweepClient(FakeBridgeClient):
+    """Fake client whose ota check responses are keyed by device id."""
+
+    def __init__(self, devices, per_device_responses=None):
+        super().__init__()
+        self.set_retained("zigbee2mqtt/bridge/devices", json.dumps(devices))
+        self._per_device = per_device_responses or {}
+
+    def request(self, path, payload=None, *, timeout=15.0):
+        assert path == "device/ota_update/check"
+        return self._per_device.get(
+            payload["id"], {"status": "error", "error": "no canned response"}
+        )
+
+
+def _sweep_devices():
+    return [
+        {
+            "friendly_name": "Coordinator",
+            "ieee_address": "0xcoordinator",
+            "type": "Coordinator",
+            "disabled": False,
+        },
+        {
+            "friendly_name": "lamp1",
+            "ieee_address": "0xaaaa",
+            "type": "Router",
+            "disabled": False,
+        },
+        {
+            "friendly_name": "sensor1",
+            "ieee_address": "0xbbbb",
+            "type": "EndDevice",
+            "disabled": False,
+        },
+        {
+            "friendly_name": "old_plug",
+            "ieee_address": "0xcccc",
+            "type": "Router",
+            "disabled": True,
+        },
+    ]
+
+
+def _sweep_responses():
+    return {
+        "0xaaaa": {"status": "ok", "data": {"update_available": True}},
+        "0xbbbb": {"status": "ok", "data": {"update_available": False}},
+        "0xcccc": {
+            "status": "error",
+            "error": "Device 'old_plug' does not support OTA updates",
+        },
+    }
+
+
+class TestOtaCheckAllSweep:
+    def _invoke(self, client, args):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            return _runner().invoke(cli, ["--mqtt-host", "x", *args])
+
+    def test_json_sweep(self):
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["--json", "ota", "check", "--all"])
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        names = [r["friendly_name"] for r in rows]
+        assert "Coordinator" not in names  # coordinator never swept
+        assert "old_plug" not in names  # disabled devices filtered
+        assert names == ["lamp1", "sensor1"]  # updates first
+        by_name = {r["friendly_name"]: r for r in rows}
+        assert by_name["lamp1"]["status"] == "update_available"
+        assert by_name["sensor1"]["status"] == "up_to_date"
+
+    def test_json_sweep_filters_disabled_by_default(self):
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["--json", "ota", "check", "--all"])
+        rows = json.loads(result.output)
+        assert "old_plug" not in [r["friendly_name"] for r in rows]
+
+    def test_json_sweep_include_disabled(self):
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["--json", "ota", "check", "--all", "--include-disabled"])
+        rows = json.loads(result.output)
+        by_name = {r["friendly_name"]: r for r in rows}
+        assert by_name["old_plug"]["status"] == "not_supported"
+
+    def test_table_sweep_shows_summary_line(self):
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["ota", "check", "--all", "--include-disabled"])
+        assert result.exit_code == 0, result.output
+        assert "lamp1" in result.output
+        assert "checked 3: 1 update(s) available, 1 up to date, 1 not OTA-capable, 0 error(s)" in (
+            result.output
+        )
+
+    def test_with_update_flag_filters_rows(self):
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["--json", "ota", "check", "--all", "--with-update"])
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [r["friendly_name"] for r in rows] == ["lamp1"]
+
+    def test_with_update_flag_no_matches(self):
+        devices = [
+            {
+                "friendly_name": "sensor1",
+                "ieee_address": "0xbbbb",
+                "type": "EndDevice",
+                "disabled": False,
+            }
+        ]
+        responses = {"0xbbbb": {"status": "ok", "data": {"update_available": False}}}
+        client = _SweepClient(devices, responses)
+        result = self._invoke(client, ["--json", "ota", "check", "--all", "--with-update"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == []
+
+    def test_neither_name_nor_all_is_an_error(self):
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["ota", "check"])
+        assert result.exit_code != 0
+        assert "give a device name or --all" in result.output
+
+    def test_name_plus_all_is_rejected(self):
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["ota", "check", "lamp1", "--all"])
+        assert result.exit_code != 0
+        assert "cannot combine" in result.output
+
+    def test_single_device_check_still_works(self):
+        client = FakeBridgeClient()
+        client.set_response(
+            "device/ota_update/check", {"status": "ok", "data": {"update_available": False}}
+        )
+        result = self._invoke(client, ["--json", "ota", "check", "lamp1", "--timeout", "12"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["update_available"] is False
+
+    def test_workflow_sweep_then_schedule(self):
+        """Sweep the network, then act on the device the sweep surfaced."""
+        client = _SweepClient(_sweep_devices(), _sweep_responses())
+        # patch the check path onto the shared FakeBridgeClient behaviour:
+        # the sweep client needs to also answer device/ota_update/schedule
+        client.set_response("device/ota_update/schedule", {"status": "ok"})
+
+        def request(path, payload=None, *, timeout=15.0):
+            if path == "device/ota_update/check":
+                return _SweepClient.request(client, path, payload, timeout=timeout)
+            return FakeBridgeClient.request(client, path, payload, timeout=timeout)
+
+        client.request = request
+
+        result = self._invoke(client, ["--json", "ota", "check", "--all", "--with-update"])
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        target = rows[0]["friendly_name"]
+        assert target == "lamp1"
+
+        result = self._invoke(client, ["--json", "ota", "schedule", target])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "ok"}
+
+
 # ── network ───────────────────────────────────────────────────────────────────
 
 
