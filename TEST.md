@@ -25,15 +25,17 @@ This is exactly the CI gate; it must exit 0 before merge.
 | `test_cli_helpers.py` | CLI helper functions (`emit`, `_print_table`, `_parse_kv_fields`, …) |
 | `test_refine.py` | The v0.2.0 refine pass: bindings, generate-converter, configure-reporting, install codes, extensions, group options |
 | `test_coverage_boost.py` / `test_coverage_boost2.py` | Branch coverage for watch callbacks, malformed payloads, k8s backend |
+| `test_refine2.py` | Second refine pass: interactive REPL loop E2E (banner, exit/quit/help, command dispatch, unknown-command and exception handling, EOF/Ctrl-C, bare-invocation fallback), ReplSkin banner/prompt/session factory (incl. ImportError fallbacks), CLI argument error paths (invalid JSON, missing keys, clobber guard, unknown cluster/extension, MqttError propagation), core branches (log-level get/set, device disable/enable/last_seen, flatten edge cases, extension save validation, converter ls parsing, env overrides, BridgeClient payload coercion + missing-paho guard) |
 | `test_repl_skin.py` | REPL prompt/parsing helpers |
 | `test_b101_regression.py`, `test_b105_regression.py`, `test_security_regression.py` | Regression locks: no `time.time()` misuse, shell-safety, callback exceptions logged |
 
-## Latest run (v0.2.0, 2026-09-06)
+## Latest run (refine pass 2, 2026-09-06)
 
-- 744 passed, 0 failed
-- Coverage: **92.8%** total (gate requires 80%)
+- 815 passed, 0 failed
+- Coverage: **97.6%** total (gate requires 80%)
 - `ruff check` / `ruff format --check` / `bandit -ll`: clean
-- New in this run: `TestOtaCheckAll` (15 unit tests for `check_all` /
-  `summarize_check` / `_classify`) and `TestOtaCheckAllSweep` (10 E2E tests
-  for `ota check --all`, `--include-disabled`, `--with-update`, arg
-  validation, and the sweep → schedule workflow).
+- New in this run: `test_refine2.py` — 71 tests for the previously
+  untested interactive REPL usage pattern, ReplSkin banner/session paths,
+  user-facing CLI error paths, and remaining core branches (see table
+  above). Overall coverage went 92.8% → 97.6%; the REPL loop and
+  `print_banner` went from 0% to fully covered.
