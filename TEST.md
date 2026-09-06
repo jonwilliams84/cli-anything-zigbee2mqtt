@@ -39,3 +39,27 @@ This is exactly the CI gate; it must exit 0 before merge.
   user-facing CLI error paths, and remaining core branches (see table
   above). Overall coverage went 92.8% → 97.6%; the REPL loop and
   `print_banner` went from 0% to fully covered.
+
+## Latest run (refine pass 3, 2026-09-06)
+
+- 851 passed, 0 failed
+- Coverage: **99.9%** total (gate requires 80%)
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: `test_refine3.py` — 36 tests closing the last
+  uncovered CLI error/edge branches (config save, bridge restart
+  `--via-kubectl` and its MqttError abort, watch-logging `--json`,
+  log-level get/set, blank-cluster definitions abort, device
+  disable/enable command bodies, generate-converter without source,
+  device write ValueError, all five scene command aborts, extension
+  show `--json`, REPL ImportError fallback and SystemExit swallowing,
+  `main()` entry point, defensive returns after `_abort` in
+  `_parse_json_obj` / `_preflight_attributes` / options-set /
+  definitions) plus core branches (`devices.last_seen` with a naive
+  timestamp, `bindings.unbind` without clusters, binding targets
+  without an ieee, converters ls passthrough, `BridgeClient.publish`
+  lazy connect, non-matching subscriber filters, ReplSkin packaged-
+  skill fallback and no-isatty color detection). Overall coverage went
+  97.6% → 99.9%; `zigbee2mqtt_cli.py` and `repl_skin.py` are now at
+  100%. The only line left uncovered is `project.load_config`'s
+  boolean-env branch (line 52) — unreachable because no `DEFAULTS`
+  key is a boolean.
