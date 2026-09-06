@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.0] — 2026-09-06
+
+- Updated `test.md`. (1 file changed, 24 insertions(+))
+
 ## [0.3.0] — 2026-09-06
 
 - Updated `test.md`. (1 file changed, 9 insertions(+), 7 deletions(-))
