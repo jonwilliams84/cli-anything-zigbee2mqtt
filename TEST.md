@@ -20,7 +20,7 @@ This is exactly the CI gate; it must exit 0 before merge.
 
 | File | What it covers |
 |---|---|
-| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability), groups, scenes, ota (check/update/schedule/unschedule **+ `check_all` network firmware sweep**), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
+| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit**), groups, scenes, ota (check/update/schedule/unschedule **+ `check_all` network firmware sweep**), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
 | `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule` on the device the sweep surfaced) |
 | `test_cli_helpers.py` | CLI helper functions (`emit`, `_print_table`, `_parse_kv_fields`, …) |
 | `test_refine.py` | The v0.2.0 refine pass: bindings, generate-converter, configure-reporting, install codes, extensions, group options |
@@ -63,3 +63,20 @@ This is exactly the CI gate; it must exit 0 before merge.
   100%. The only line left uncovered is `project.load_config`'s
   boolean-env branch (line 52) — unreachable because no `DEFAULTS`
   key is a boolean.
+
+## Latest run (refine pass 4, 2026-09-06)
+
+- 888 passed, 0 failed
+- Coverage: **99.8%** total (gate requires 80%)
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: `device battery` — network-wide battery audit
+  (`battery_sweep` + `classify_battery` in `core/devices.py`, CLI command in
+  `zigbee2mqtt_cli.py`). One `<base>/#` subscription collects every retained
+  device state and joins `battery` / `battery_low` / `voltage` onto the
+  bridge inventory; rows sort worst-first (low → unknown → ok, then percent
+  ascending); `--below`, `--low-only`, `--json`, `--duration` options;
+  mains devices and the coordinator are dropped; sleeping battery devices
+  classify as `unknown`. 37 new tests: 30 unit (`test_core.py`:
+  `TestClassifyBattery` + `TestBatterySweep`) and 7 E2E/workflow
+  (`test_full_e2e.py`: `TestDeviceBatteryCommand`, including the
+  `battery --low-only` → `device state` confirm-a-low-device workflow).

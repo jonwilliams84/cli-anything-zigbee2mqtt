@@ -680,6 +680,49 @@ def device_stale(ctx, threshold_minutes, no_routers, no_end_devices):
         )
 
 
+@device.command("battery")
+@click.option(
+    "--below",
+    default=20.0,
+    type=float,
+    show_default=True,
+    help="Percent under which a device counts as low",
+)
+@click.option(
+    "--low-only",
+    is_flag=True,
+    default=False,
+    help="Only show devices that are low or unknown",
+)
+@click.option(
+    "--duration",
+    default=2.0,
+    type=float,
+    show_default=True,
+    help="Seconds to collect retained device states",
+)
+@click.pass_context
+def device_battery(ctx, below, low_only, duration):
+    """Battery audit across the network (percent, low flag, voltage).
+
+    One wildcard subscription reads every retained device state and joins it
+    onto the bridge inventory — no per-device round trip. Rows are sorted
+    worst-first: the top row is the device that needs a fresh cell. Battery
+    devices that never published state (sleeping sensors) show as
+    ``unknown``; mains-powered devices are dropped.
+    """
+    with make_client(ctx) as c:
+        emit(
+            ctx,
+            devices_core.battery_sweep(
+                c,
+                duration=duration,
+                below=below,
+                low_only=low_only,
+            ),
+        )
+
+
 @device.command("generate-converter")
 @click.argument("ident")
 @click.option(

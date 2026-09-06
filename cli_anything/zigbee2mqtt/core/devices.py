@@ -610,6 +610,152 @@ def availability_sweep(
     return rows
 
 
+# ── battery audit (local join of bridge/devices × retained state topics) ─
+
+
+def _coerce_num(v):
+    """Percent / voltage arrive as int, float or numeric string — else None."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_battery(
+    battery,
+    battery_low,
+    *,
+    power_source: Optional[str] = None,
+    below: float = 20.0,
+) -> str:
+    """Classify one device's battery health.
+
+    ``battery`` is the percent value from the device state (may be a numeric
+    string, ``None``, or missing); ``battery_low`` is the optional boolean
+    low-battery flag. A device that is not battery powered classifies as
+    ``"mains"``; one that is battery powered but has published nothing usable
+    classifies as ``"unknown"`` (typically a sleeping sensor that must be
+    woken to report). Otherwise ``"low"`` when below *below* percent, else
+    ``"ok"``.
+    """
+    if battery is not None:
+        pct = _coerce_num(battery)
+        if pct is not None:
+            return "low" if pct < below else "ok"
+    if battery_low is True:
+        return "low"
+    if battery_low is False:
+        return "ok"
+    if power_source and "batter" in str(power_source).lower():
+        return "unknown"
+    return "mains"
+
+
+def battery_sweep(
+    client: BridgeClient,
+    *,
+    duration: float = 2.0,
+    below: float = 20.0,
+    low_only: bool = False,
+    timeout: float = 5.0,
+) -> list[dict]:
+    """Battery audit across the whole network, in one pass.
+
+    Battery sensors publish ``battery`` (percent), ``battery_low`` and
+    ``voltage`` (mV) inside their retained state payload — but only when they
+    last woke up, so the audit joins the ``bridge/devices`` inventory onto the
+    retained state topics collected in a single ``<base>/#`` subscription
+    (same technique as :func:`availability_sweep`).
+
+    Devices with no battery at all (mains-powered) are dropped. Battery
+    devices that never published state get ``status: "unknown"`` — tap them
+    to wake them and re-run.
+
+    Rows are sorted worst-first (``low`` → ``unknown`` → ``ok``, then by
+    battery percent ascending), so the top row is the device needing a fresh
+    cell. ``low_only=True`` drops everything that is ``"ok"``.
+
+    Status ranking keys used for sorting: low=0, unknown=1, ok=2.
+    """
+    devices = list_devices(client, timeout=timeout)
+    states: dict[str, dict] = {}
+    prefix = f"{client.base_topic}/"
+
+    def _cb(topic: str, payload: str) -> None:
+        if not topic.startswith(prefix) or topic.endswith(AVAILABILITY_SUFFIX):
+            return
+        name = topic[len(prefix) :]
+        # state topics are `<base>/<friendly_name>` — anything with a second
+        # level (`bridge/...`, `.../set`, `.../get`, `.../availability`) is
+        # not a device state payload.
+        if not name or "/" in name:
+            return
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        if isinstance(data, dict):
+            states[name] = data
+
+    client.subscribe(f"{client.base_topic}/#", _cb)
+    end = time.time() + max(duration, 0.0)
+    try:
+        while time.time() < end:
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+
+    rows: list[dict] = []
+    for d in devices:
+        if d.get("type") == "Coordinator":
+            continue
+        name = d.get("friendly_name")
+        state = states.get(name) if name else None
+        if state is None and d.get("ieee_address"):
+            state = states.get(d["ieee_address"])
+
+        battery = state.get("battery") if isinstance(state, dict) else None
+        battery_low = state.get("battery_low") if isinstance(state, dict) else None
+        voltage = state.get("voltage") if isinstance(state, dict) else None
+        try:
+            voltage = float(voltage) if voltage is not None else None
+        except (TypeError, ValueError):
+            voltage = None
+
+        power_source = d.get("power_source")
+        status = classify_battery(battery, battery_low, power_source=power_source, below=below)
+        if status == "mains":
+            continue
+        if low_only and status == "ok":
+            continue
+
+        defn = d.get("definition") or {}
+        rows.append(
+            {
+                "friendly_name": name,
+                "ieee_address": d.get("ieee_address"),
+                "battery": _coerce_num(battery),
+                "battery_low": bool(battery_low) if battery_low is not None else None,
+                "voltage": voltage,
+                "status": status,
+                "type": d.get("type"),
+                "model": defn.get("model"),
+                "power_source": power_source,
+            }
+        )
+    rank = {"low": 0, "unknown": 1, "ok": 2}
+    rows.sort(
+        key=lambda r: (
+            rank.get(r["status"], 3),
+            r["battery"] if r["battery"] is not None else float("inf"),
+            str(r["friendly_name"] or ""),
+        )
+    )
+    return rows
+
+
 # ── endpoint / cluster introspection (local, from bridge/devices) ───────
 #
 # The retained ``bridge/devices`` inventory carries, per endpoint:
