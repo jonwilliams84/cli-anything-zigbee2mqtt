@@ -2999,3 +2999,160 @@ class TestClusterIntrospectionWorkflows:
             rows = json.loads(back.output)
             assert rows[0]["cluster"] == "genOnOff"
             assert rows[0]["attribute"] == "onOff"
+
+
+# ── device battery (refine pass 4) ───────────────────────────────────────────
+
+
+BATTERY_INVENTORY = json.dumps(
+    [
+        {"friendly_name": "Coordinator", "type": "Coordinator", "ieee_address": "0x00"},
+        {
+            "friendly_name": "Door Sensor",
+            "type": "EndDevice",
+            "ieee_address": "0xaaa",
+            "power_source": "Battery",
+            "definition": {"model": "MCCGQ11LM"},
+        },
+        {
+            "friendly_name": "Thermo",
+            "type": "EndDevice",
+            "ieee_address": "0xbbb",
+            "power_source": "Battery",
+        },
+        {
+            "friendly_name": "lamp1",
+            "type": "Router",
+            "ieee_address": "0xccc",
+            "power_source": "Mains (single phase)",
+        },
+        {
+            "friendly_name": "Remote",
+            "type": "EndDevice",
+            "ieee_address": "0xddd",
+            "power_source": "Battery",
+        },
+    ]
+)
+
+
+class TestDeviceBatteryCommand:
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", BATTERY_INVENTORY)
+        client.set_retained("zigbee2mqtt/Door Sensor", json.dumps({"battery": 87, "voltage": 2915}))
+        client.set_retained("zigbee2mqtt/Thermo", json.dumps({"battery": 9, "battery_low": True}))
+        client.set_retained("zigbee2mqtt/Remote", json.dumps({"contact": True}))
+        return client
+
+    def test_battery_sweep_json(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "battery", "--duration", "0"]
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        # low → unknown → ok; mains lamp1 and coordinator dropped
+        assert [r["friendly_name"] for r in rows] == ["Thermo", "Remote", "Door Sensor"]
+        thermo = rows[0]
+        assert thermo["status"] == "low"
+        assert thermo["battery"] == 9.0
+        assert thermo["battery_low"] is True
+        assert thermo["voltage"] is None
+
+    def test_battery_low_only_table(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "device", "battery", "--duration", "0", "--low-only"],
+            )
+        assert result.exit_code == 0, result.output
+        assert "friendly_name" in result.output  # table header
+        assert "Thermo" in result.output
+        assert "Remote" in result.output
+        assert "Door Sensor" not in result.output  # ok → filtered out
+        assert "lamp1" not in result.output  # mains → dropped
+
+    def test_battery_below_option(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "battery",
+                    "--duration",
+                    "0",
+                    "--below",
+                    "90",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        status = {r["friendly_name"]: r["status"] for r in rows}
+        assert status["Door Sensor"] == "low"
+        assert status["Thermo"] == "low"
+
+    def test_battery_no_battery_devices_is_empty(self):
+        client = SubscribingFakeClient()
+        client.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([{"friendly_name": "lamp1", "type": "Router"}]),
+        )
+        with _patched(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "battery", "--duration", "0"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == []
+
+    def test_battery_ignores_non_state_topics(self):
+        client = self._client()
+        client.set_retained("zigbee2mqtt/bridge/info", json.dumps({"battery": 99}))
+        client.set_retained("zigbee2mqtt/Thermo/set", json.dumps({"battery": 99}))
+        with _patched(client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "battery", "--duration", "0"]
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        thermo = next(r for r in rows if r["friendly_name"] == "Thermo")
+        assert thermo["battery"] == 9.0  # from the real state topic, not bridge/info or /set
+
+    def test_battery_single_wildcard_subscription(self):
+        client = self._client()
+        with _patched(client):
+            _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "battery", "--duration", "0"]
+            )
+        assert client.subscriptions == ["zigbee2mqtt/#"]
+
+    def test_workflow_low_battery_then_read_state(self):
+        """Battery audit surfaces the worst device → confirm via its state."""
+        client = self._client()
+        with _patched(client):
+            runner = _runner()
+            sweep = runner.invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "device",
+                    "battery",
+                    "--duration",
+                    "0",
+                    "--low-only",
+                ],
+            )
+            assert sweep.exit_code == 0, sweep.output
+            worst = json.loads(sweep.output)[0]
+            assert worst["friendly_name"] == "Thermo"
+
+            state = runner.invoke(cli, ["--mqtt-host", "x", "--json", "device", "state", "Thermo"])
+            assert state.exit_code == 0, state.output
+            payload = json.loads(state.output)
+            assert payload["battery"] == 9
+            assert payload["battery_low"] is True

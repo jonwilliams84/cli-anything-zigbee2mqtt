@@ -2717,3 +2717,260 @@ class TestOtaCheckAll:
         from cli_anything.zigbee2mqtt.core import ota as ota_core
 
         assert ota_core.summarize_check([])["total"] == 0
+
+
+# ── battery audit (refine pass 4) ────────────────────────────────────────────
+
+
+class TestClassifyBattery:
+    def test_percent_above_threshold_is_ok(self):
+        assert devices_core.classify_battery(87, None) == "ok"
+
+    def test_percent_below_threshold_is_low(self):
+        assert devices_core.classify_battery(15, None) == "low"
+
+    def test_percent_at_threshold_is_ok(self):
+        assert devices_core.classify_battery(20, None) == "ok"
+
+    def test_numeric_string_percent(self):
+        assert devices_core.classify_battery("85", None) == "ok"
+
+    def test_non_numeric_percent_falls_through(self):
+        # garbage percent → judge on battery_low / power_source instead
+        assert devices_core.classify_battery("full", None, power_source="Battery") == "unknown"
+        assert devices_core.classify_battery("full", True) == "low"
+
+    def test_battery_low_flag_true_is_low(self):
+        assert devices_core.classify_battery(None, True) == "low"
+
+    def test_battery_low_flag_false_is_ok(self):
+        assert devices_core.classify_battery(None, False) == "ok"
+
+    def test_battery_powered_without_data_is_unknown(self):
+        assert devices_core.classify_battery(None, None, power_source="Battery") == "unknown"
+
+    def test_battery_powered_case_insensitive(self):
+        assert (
+            devices_core.classify_battery(None, None, power_source="BATTERY OR MAINS") == "unknown"
+        )
+
+    def test_mains_device_is_mains(self):
+        assert devices_core.classify_battery(None, None, power_source="Mains (single phase)") == (
+            "mains"
+        )
+
+    def test_no_power_source_is_mains(self):
+        assert devices_core.classify_battery(None, None) == "mains"
+
+    def test_custom_below(self):
+        assert devices_core.classify_battery(55, None, below=60) == "low"
+
+    def test_battery_bool_is_not_a_percent(self):
+        # bool is an int subclass in python — but True as a battery percent is
+        # nonsense; it would read as 1.0. Coercion keeps it (1.0 < 20 → low);
+        # a real z2m payload never sends this, but pin the behaviour.
+        assert devices_core.classify_battery(True, None) == "low"
+
+
+class TestBatterySweep:
+    def _client(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [
+                    {"friendly_name": "Coordinator", "type": "Coordinator", "ieee_address": "0x00"},
+                    {
+                        "friendly_name": "Door Sensor",
+                        "type": "EndDevice",
+                        "ieee_address": "0xaaa",
+                        "power_source": "Battery",
+                        "definition": {"model": "MCCGQ11LM"},
+                    },
+                    {"friendly_name": "Thermo", "type": "EndDevice", "power_source": "Battery"},
+                    {
+                        "friendly_name": "Plug",
+                        "type": "Router",
+                        "power_source": "Mains (single phase)",
+                    },
+                    {
+                        "friendly_name": "Remote",
+                        "type": "EndDevice",
+                        "power_source": "Battery",
+                    },
+                ]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/Door Sensor", json.dumps({"battery": 87, "voltage": 2915}))
+        c.set_retained("zigbee2mqtt/Thermo", json.dumps({"battery": 9, "battery_low": True}))
+        c.set_retained("zigbee2mqtt/Remote", json.dumps({"contact": True}))
+        return c
+
+    def test_low_first_then_ok(self):
+        rows = devices_core.battery_sweep(self._client(), duration=0)
+        assert [r["friendly_name"] for r in rows] == ["Thermo", "Remote", "Door Sensor"]
+
+    def test_mains_and_coordinator_dropped(self):
+        rows = devices_core.battery_sweep(self._client(), duration=0)
+        names = {r["friendly_name"] for r in rows}
+        assert "Plug" not in names
+        assert "Coordinator" not in names
+
+    def test_row_fields(self):
+        rows = devices_core.battery_sweep(self._client(), duration=0)
+        door = next(r for r in rows if r["friendly_name"] == "Door Sensor")
+        if door["battery"] != 87.0 or door["voltage"] != 2915.0:
+            raise AssertionError(f"expected battery 87 / voltage 2915, got {door}")
+        if door["status"] != "ok":
+            raise AssertionError(f"expected ok, got {door['status']}")
+        if door["model"] != "MCCGQ11LM":
+            raise AssertionError(f"expected model carried, got {door}")
+        if door["battery_low"] is not None:
+            raise AssertionError(f"expected battery_low None, got {door}")
+
+    def test_below_threshold_flags_low(self):
+        # 87% is fine at the default 20 but low under a 90% threshold
+        rows = devices_core.battery_sweep(self._client(), duration=0, below=90)
+        status = {r["friendly_name"]: r["status"] for r in rows}
+        assert status["Door Sensor"] == "low"
+        assert status["Thermo"] == "low"
+
+    def test_unknown_battery_device(self):
+        rows = devices_core.battery_sweep(self._client(), duration=0)
+        remote = next(r for r in rows if r["friendly_name"] == "Remote")
+        assert remote["status"] == "unknown"
+        assert remote["battery"] is None
+
+    def test_low_only_drops_ok(self):
+        rows = devices_core.battery_sweep(self._client(), duration=0, low_only=True)
+        names = [r["friendly_name"] for r in rows]
+        assert "Door Sensor" not in names
+        assert "Thermo" in names and "Remote" in names
+
+    def test_low_only_with_higher_below(self):
+        rows = devices_core.battery_sweep(self._client(), duration=0, low_only=True, below=90)
+        assert [r["friendly_name"] for r in rows] == ["Thermo", "Door Sensor", "Remote"]
+
+    def test_subscribes_to_wildcard_once(self):
+        c = self._client()
+        devices_core.battery_sweep(c, duration=0)
+        assert c.subscriptions == ["zigbee2mqtt/#"]
+
+    def test_ignores_non_state_topics(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([{"friendly_name": "lamp", "type": "Router", "power_source": "Battery"}]),
+        )
+        c.set_retained("zigbee2mqtt/bridge/info", json.dumps({"battery": 99}))
+        c.set_retained("zigbee2mqtt/lamp/set", json.dumps({"battery": 99}))
+        c.set_retained("zigbee2mqtt/lamp/availability", "online")
+        rows = devices_core.battery_sweep(c, duration=0)
+        assert rows == [
+            {
+                "friendly_name": "lamp",
+                "ieee_address": None,
+                "battery": None,
+                "battery_low": None,
+                "voltage": None,
+                "status": "unknown",
+                "type": "Router",
+                "model": None,
+                "power_source": "Battery",
+            }
+        ]
+
+    def test_malformed_state_json_is_ignored(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [{"friendly_name": "sensor", "type": "EndDevice", "power_source": "Battery"}]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/sensor", "not json {{{")
+        rows = devices_core.battery_sweep(c, duration=0)
+        assert rows[0]["status"] == "unknown"
+
+    def test_non_dict_state_json_is_ignored(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [{"friendly_name": "sensor", "type": "EndDevice", "power_source": "Battery"}]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/sensor", '"hello"')
+        rows = devices_core.battery_sweep(c, duration=0)
+        assert rows[0]["status"] == "unknown"
+
+    def test_numeric_string_battery_and_voltage(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [{"friendly_name": "sensor", "type": "EndDevice", "power_source": "Battery"}]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/sensor", json.dumps({"battery": "55", "voltage": "3000"}))
+        rows = devices_core.battery_sweep(c, duration=0)
+        assert rows[0]["battery"] == 55.0
+        assert rows[0]["voltage"] == 3000.0
+
+    def test_non_numeric_voltage_is_none(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [{"friendly_name": "sensor", "type": "EndDevice", "power_source": "Battery"}]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/sensor", json.dumps({"battery": 55, "voltage": "high"}))
+        rows = devices_core.battery_sweep(c, duration=0)
+        assert rows[0]["voltage"] is None
+
+    def test_battery_zero_is_low(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [{"friendly_name": "sensor", "type": "EndDevice", "power_source": "Battery"}]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/sensor", json.dumps({"battery": 0}))
+        rows = devices_core.battery_sweep(c, duration=0)
+        assert rows[0]["status"] == "low"
+
+    def test_falls_back_to_ieee_topic(self):
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [
+                    {
+                        "friendly_name": "0xaaa",
+                        "type": "EndDevice",
+                        "ieee_address": "0xaaa",
+                        "power_source": "Battery",
+                    }
+                ]
+            ),
+        )
+        c.set_retained("zigbee2mqtt/0xaaa", json.dumps({"battery": 66}))
+        rows = devices_core.battery_sweep(c, duration=0)
+        assert rows[0]["battery"] == 66.0
+
+    def test_empty_inventory(self):
+        assert devices_core.battery_sweep(SubscribingClient(), duration=0) == []
+
+    def test_waits_for_the_requested_duration(self):
+        import time as _time
+
+        c = SubscribingClient()
+        c.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([{"friendly_name": "s", "type": "EndDevice", "power_source": "Battery"}]),
+        )
+        started = _time.monotonic()
+        devices_core.battery_sweep(c, duration=0.12)
+        assert _time.monotonic() - started >= 0.1

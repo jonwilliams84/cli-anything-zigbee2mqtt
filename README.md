@@ -38,7 +38,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | Group | Examples |
 |---|---|
 | `bridge` | `info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging` |
-| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
+| `device` | `list / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state` |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check [name \| --all] / update / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware |
@@ -117,6 +117,7 @@ cli-anything-zigbee2mqtt bridge restart --via-kubectl
 # v0.2.0 refine surface
 cli-anything-zigbee2mqtt device state 'Lounge Lamp'         # one-shot retained
 cli-anything-zigbee2mqtt --json device stale --threshold 360 # >6h silent
+cli-anything-zigbee2mqtt --json device battery --low-only # who needs a cell
 cli-anything-zigbee2mqtt device generate-converter <name> -o new-device.js
 cli-anything-zigbee2mqtt device configure-reporting <name> \
   --cluster msTemperatureMeasurement --attribute measuredValue \
@@ -181,6 +182,15 @@ Rows come back offline-first. `last_seen` (see `device stale`) is the
 complementary signal: availability is z2m's verdict, `last_seen` is the raw
 evidence.
 
+`device battery` is the battery-flavoured sibling sweep: one `<base>/#`
+subscription collects every retained device state and joins `battery`
+(percent), `battery_low` and `voltage` (mV) onto the inventory. Rows are
+sorted worst-first — `low` → `unknown` → `ok`, then percent ascending — so the
+top row is the device that needs a fresh cell. `--below N` redefines "low"
+(default 20%), `--low-only` drops the healthy devices. Battery devices that
+have never published state (sleeping sensors) show as `unknown`: tap them to
+wake them and re-run. Mains-powered devices are dropped entirely.
+
 `device read` / `device write` reach attributes that no converter models, by
 publishing `{"read": …}` / `{"write": …}` to the device command topic. Like
 scenes they are Zigbee cluster commands with **no** `bridge/response`, so a zero
@@ -240,6 +250,7 @@ cli_anything/zigbee2mqtt/
 │   │                       # + state (retained one-shot) / stale / generate-converter
 │   │                       # / configure-reporting / exposes (local introspection)
 │   │                       # / availability + availability_sweep
+│   │                       # / battery_sweep (network battery audit)
 │   ├── attributes.py       # raw ZCL cluster read / write (device read|write)
 │   ├── bindings.py         # device/bind, device/unbind, list_bindings (local)
 │   ├── groups.py           # group CRUD + membership + options
@@ -276,8 +287,8 @@ python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 645 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
 a fake MQTT transport, every mutator in bindings / install_code / extensions /
 groups / scenes / attributes, the read-side helpers in devices.py (read_state /
-find_stale / exposes / availability_sweep / generate_external_definition /
-configure_reporting), and multi-command workflows (create group → add member →
+find_stale / exposes / availability_sweep / battery_sweep /
+generate_external_definition / configure_reporting), and multi-command workflows (create group → add member →
 groupcast set → store/recall scene; `device exposes` → `device set`; raw
 `device read` → `device state` read-back). No broker and no kubectl needed.
 
