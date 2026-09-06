@@ -41,6 +41,7 @@ cli-anything-zigbee2mqtt device get 'Lounge Lamp' state brightness
 
 # OTA
 cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom'
+cli-anything-zigbee2mqtt --json ota check --all --with-update   # network firmware sweep
 cli-anything-zigbee2mqtt ota update 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota unschedule 'Radiator - Master Bedroom'
 
@@ -85,7 +86,7 @@ cli-anything-zigbee2mqtt converter remove my-override.js
 | `device` | list / show / rename / remove / configure / interview / options / set / get / watch / exposes / endpoints / clusters / reportings / read / write / bind / unbind / bindings |
 | `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state |
 | `scene` | list / store / recall / add / rename / remove / remove-all (Zigbee scenes on a device or group) |
-| `ota` | check / update / schedule |
+| `ota` | check / update / schedule / unschedule (`check --all` sweeps the network) |
 | `network` | permit-join / map / touchlink-* / coordinator-check / backup |
 | `converter` | list / show / add / remove (external_converters via kubectl) |
 | `config` | show / save |
@@ -105,7 +106,8 @@ cli_anything/zigbee2mqtt/
 │   │                       # + exposes / endpoints / clusters / reportings introspection
 │   ├── groups.py           # group CRUD + membership + groupcast set/get/state
 │   ├── scenes.py           # scene store/recall/add/remove/rename + list
-│   ├── ota.py              # OTA check / update / schedule
+│   ├── ota.py              # OTA check / update / schedule / unschedule
+│   │                       # + check_all (whole-network firmware sweep)
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
 │   ├── converters.py       # external_converters/ file mgmt (uses k8s_backend)
 │   ├── k8s_backend.py      # kubectl helpers

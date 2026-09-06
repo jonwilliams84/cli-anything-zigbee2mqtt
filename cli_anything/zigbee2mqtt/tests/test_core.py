@@ -2493,3 +2493,227 @@ class TestEndpointSummaryEdgeCases:
         rows = devices_core.endpoint_summary(c, "odd")
         assert rows[0]["scenes"] == 0
         assert rows[0]["scene_ids"] == []
+
+
+# ── ota check_all (network firmware sweep) ────────────────────────────────────
+
+
+class TestOtaCheckAll:
+    @staticmethod
+    def _device(name, *, ieee=None, type_="EndDevice", disabled=False):
+        return {
+            "friendly_name": name,
+            "ieee_address": ieee or f"0x{abs(hash(name)):016x}",
+            "type": type_,
+            "disabled": disabled,
+        }
+
+    def _client(self, devices, per_device_responses=None):
+        """Fake client whose check responses are keyed by device id."""
+
+        class SweepClient(FakeBridgeClientForBridge):
+            def request(self, path, payload=None, *, timeout=15.0):
+                assert path == "device/ota_update/check"
+                return (per_device_responses or {}).get(
+                    payload["id"], {"status": "error", "error": "no canned response"}
+                )
+
+        client = SweepClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(devices))
+        return client
+
+    def test_classify_ok_true_false(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        assert (
+            ota_core._classify({"status": "ok", "data": {"update_available": True}})[0]
+            == "update_available"
+        )
+        assert (
+            ota_core._classify({"status": "ok", "data": {"update_available": False}})[0]
+            == "up_to_date"
+        )
+
+    def test_classify_ok_without_flag_is_unknown(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        status, _ = ota_core._classify({"status": "ok", "data": {"id": "x"}})
+        assert status == "unknown"
+
+    def test_classify_ok_non_dict_data_is_unknown(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        status, detail = ota_core._classify({"status": "ok", "data": "weird"})
+        assert status == "unknown"
+        assert detail == "weird"
+
+    def test_classify_not_supported_message(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        status, detail = ota_core._classify(
+            {"status": "error", "error": "Device 'x' does not support OTA updates"}
+        )
+        assert status == "not_supported"
+        assert "does not support" in detail
+
+    def test_classify_other_error(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        status, detail = ota_core._classify({"status": "error", "error": "timeout"})
+        assert status == "error"
+        assert detail == "timeout"
+
+    def test_sweep_classifies_each_device(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        lamp1 = self._device("lamp1")
+        sensor1 = self._device("sensor1")
+        client = self._client(
+            [lamp1, sensor1],
+            {
+                lamp1["ieee_address"]: {
+                    "status": "ok",
+                    "data": {"update_available": True},
+                },
+                sensor1["ieee_address"]: {
+                    "status": "ok",
+                    "data": {"update_available": False},
+                },
+            },
+        )
+        rows = ota_core.check_all(client)
+        by_name = {r["friendly_name"]: r for r in rows}
+        assert by_name["lamp1"]["status"] == "update_available"
+        assert by_name["lamp1"]["update_available"] is True
+        assert by_name["sensor1"]["status"] == "up_to_date"
+        assert by_name["sensor1"]["update_available"] is False
+
+    def test_sweep_skips_coordinator_and_disabled(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        client = self._client(
+            [
+                self._device("Coordinator", type_="Coordinator"),
+                self._device("lamp1"),
+                self._device("broken", disabled=True),
+            ],
+            {"ota/lamp1": {"status": "ok", "data": {"update_available": True}}},
+        )
+        rows = ota_core.check_all(client)
+        assert [r["friendly_name"] for r in rows] == ["lamp1"]
+
+    def test_sweep_include_disabled(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        lamp1 = self._device("lamp1")
+        broken = self._device("broken", disabled=True)
+        client = self._client(
+            [lamp1, broken],
+            {
+                lamp1["ieee_address"]: {"status": "ok", "data": {"update_available": False}},
+                broken["ieee_address"]: {
+                    "status": "ok",
+                    "data": {"update_available": False},
+                },
+            },
+        )
+        rows = ota_core.check_all(client, include_disabled=True)
+        assert {r["friendly_name"] for r in rows} == {"lamp1", "broken"}
+
+    def test_sweep_continues_past_device_errors(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        fine = self._device("fine")
+
+        class FlakyClient(FakeBridgeClientForBridge):
+            def request(self, path, payload=None, *, timeout=15.0):
+                if payload["id"] == fine["ieee_address"]:
+                    return {"status": "ok", "data": {"update_available": True}}
+                raise RuntimeError("no response from device")
+
+        flaky = FlakyClient()
+        flaky.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([self._device("dead"), fine]),
+        )
+        rows = ota_core.check_all(flaky)
+        statuses = {r["friendly_name"]: r["status"] for r in rows}
+        assert statuses == {"dead": "error", "fine": "update_available"}
+
+    def test_sweep_error_row_detail(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        class BoomClient(FakeBridgeClientForBridge):
+            def request(self, path, payload=None, *, timeout=15.0):
+                raise RuntimeError("device went away")
+
+        client = BoomClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps([self._device("lamp1")]))
+        rows = ota_core.check_all(client)
+        assert rows[0]["status"] == "error"
+        assert "device went away" in rows[0]["detail"]
+
+    def test_sweep_uses_ieee_as_request_id(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        seen = []
+
+        class Recorder(FakeBridgeClientForBridge):
+            def request(self, path, payload=None, *, timeout=15.0):
+                seen.append((path, payload))
+                return {"status": "ok", "data": {"update_available": False}}
+
+        client = Recorder()
+        client.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps([self._device("lamp1", ieee="0xaabb")]),
+        )
+        ota_core.check_all(client)
+        assert seen[0] == ("device/ota_update/check", {"id": "0xaabb"})
+
+    def test_sweep_sorts_updates_first(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        aaa = self._device("aaa")
+        zzz = self._device("zzz")
+        mmm = self._device("mmm")
+        client = self._client(
+            [aaa, zzz, mmm],
+            {
+                aaa["ieee_address"]: {"status": "ok", "data": {"update_available": False}},
+                zzz["ieee_address"]: {"status": "ok", "data": {"update_available": True}},
+                mmm["ieee_address"]: {"status": "ok", "data": {"update_available": False}},
+            },
+        )
+        rows = ota_core.check_all(client)
+        assert rows[0]["friendly_name"] == "zzz"
+
+    def test_sweep_empty_inventory(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        client = self._client([])
+        assert ota_core.check_all(client) == []
+
+    def test_summarize_counts(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        rows = [
+            {"status": "update_available"},
+            {"status": "up_to_date"},
+            {"status": "up_to_date"},
+            {"status": "not_supported"},
+            {"status": "error"},
+        ]
+        assert ota_core.summarize_check(rows) == {
+            "total": 5,
+            "update_available": 1,
+            "up_to_date": 2,
+            "not_supported": 1,
+            "unknown": 0,
+            "error": 1,
+        }
+
+    def test_summarize_empty(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        assert ota_core.summarize_check([])["total"] == 0

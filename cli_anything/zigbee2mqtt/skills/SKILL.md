@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -13,7 +13,7 @@ agent can reliably tell whether an operation succeeded.
 ## When to use
 
 - Renaming, removing, configuring, or re-interviewing a Zigbee device.
-- Triggering OTA firmware checks / updates.
+- Triggering OTA firmware checks / updates — for one device or network-wide (`ota check --all`).
 - Opening the network (`permit_join`) to add a new device or close it.
 - Reading the current device or group inventory in JSON form.
 - Finding out which properties a device accepts before writing to it
@@ -50,7 +50,7 @@ Two external deps:
 | `device` | `device list`, `device list --full`, `device show <name>`, `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]`, `device exposes <name> --settable`, `device endpoints <name>`, `device clusters <name> --direction input|output`, `device reportings [<name>]`, `device availability <name>`, `device availability-sweep --offline-only`, `device read <name> --cluster genBasic --attribute zclVersion`, `device write <name> --cluster genOnOff onOff=1`, `device disable <name>`, `device enable <name>`, `device last-seen <name>` |
 | `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained) |
 | `scene` | `scene list <target>`, `scene store <target> <id> --name Chill`, `scene recall <target> <id>`, `scene add <target> <id> --state ON --brightness 200 --color-temp 370 --transition 2`, `scene rename <target> <id> <name>`, `scene remove <target> <id>`, `scene remove-all <target> --yes` — TARGET is a device or group friendly_name; add `--endpoint <n>` for multi-gang devices |
-| `ota` | `ota check <name>`, `ota update <name>`, `ota schedule <name>`, `ota unschedule <name>` |
+| `ota` | `ota check <name>`, `ota check --all` (network firmware sweep), `ota check --all --with-update`, `ota update <name>`, `ota schedule <name>`, `ota unschedule <name>` |
 | `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup` |
 | `install-code` | `install-code add <QR-text>`, `install-code remove <QR-text>` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `converter list`, `converter show <name.js>`, `converter add <name.js> ./local.js`, `converter remove <name.js>` |
@@ -130,6 +130,16 @@ device rejects the frame. Prefer the modelled property via `device set` whenever
 the device next checks in (hours, on battery), so cancel with `ota unschedule
 <name>` rather than waiting it out.
 
+**`ota check --all` sweeps the whole network for firmware.** One
+`device/ota_update/check` round trip per device (coordinator and disabled
+devices skipped; `--include-disabled` overrides), so it can take a while on a
+big network — one unreachable battery sensor is recorded as an `error` row and
+never hides the rest. Rows are sorted update-available-first with a status per
+device (`update_available`, `up_to_date`, `not_supported`, `unknown`,
+`error`); `--with-update` narrows to devices that actually have pending
+firmware. Chain it with `ota update` / `ota schedule <name>` on the rows you
+care about.
+
 **Permit-join auto-closes.** `permit-join on --time 60` opens for 60s then
 closes. Don't leave it open indefinitely.
 
@@ -161,6 +171,18 @@ cli-anything-zigbee2mqtt device rename <auto-generated-name> <friendly-name>
 cli-anything-zigbee2mqtt --json bridge info | jq '.coordinator, .restart_required, .permit_join'
 cli-anything-zigbee2mqtt --json bridge health
 cli-anything-zigbee2mqtt --json device list | jq '[.[] | select(.interview_completed==false)]'
+```
+
+### Network-wide firmware sweep
+
+```bash
+# One row per device, update-available first; error rows keep the sweep honest.
+cli-anything-zigbee2mqtt --json ota check --all \
+  | jq '.[] | select(.status=="update_available") | .friendly_name'
+
+# Then update (long timeout!) or schedule for the next idle window:
+cli-anything-zigbee2mqtt ota update 'Lounge Lamp' --timeout 1200
+cli-anything-zigbee2mqtt ota schedule 'balcony-temp'   # battery device, sleeps
 ```
 
 ### Patch a device's exposes (the way we fixed Tuya ZY-M100-24GV3 sensitivity)

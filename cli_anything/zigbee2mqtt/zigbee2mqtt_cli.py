@@ -1409,12 +1409,62 @@ def ota():
 
 
 @ota.command("check")
-@click.argument("id_or_name")
+@click.argument("id_or_name", required=False)
+@click.option(
+    "--all",
+    "check_all_flag",
+    is_flag=True,
+    default=False,
+    help="Sweep every device in the network instead of one (skips coordinator and disabled devices).",
+)
+@click.option(
+    "--include-disabled",
+    is_flag=True,
+    default=False,
+    help="With --all: also check disabled devices.",
+)
+@click.option(
+    "--with-update",
+    is_flag=True,
+    default=False,
+    help="With --all: only show devices that have an update available.",
+)
+@click.option(
+    "--timeout",
+    default=30.0,
+    type=float,
+    help="Per-device response timeout in seconds (default 30).",
+)
 @click.pass_context
-def ota_check(ctx, id_or_name):
-    """Check for available OTA updates for a device."""
+def ota_check(ctx, id_or_name, check_all_flag, include_disabled, with_update, timeout):
+    """Check for available OTA updates — one device, or the whole network with --all."""
+    if check_all_flag:
+        if id_or_name:
+            _abort("cannot combine ID_OR_NAME with --all (the sweep covers every device).")
+        with make_client(ctx) as c:
+            rows = ota_core.check_all(c, timeout=timeout, include_disabled=include_disabled)
+            if with_update:
+                rows = [r for r in rows if r["status"] == "update_available"]
+            if not ctx.obj.get("as_json") and rows:
+                counts = ota_core.summarize_check(rows)
+                emit(ctx, rows)
+                click.echo(
+                    "checked {total}: {ua} update(s) available, {utd} up to date, "
+                    "{ns} not OTA-capable, {err} error(s)".format(
+                        total=counts["total"],
+                        ua=counts["update_available"],
+                        utd=counts["up_to_date"],
+                        ns=counts["not_supported"],
+                        err=counts["error"],
+                    )
+                )
+            else:
+                emit(ctx, rows)
+        return
+    if not id_or_name:
+        _abort("give a device name or --all.")
     with make_client(ctx) as c:
-        emit(ctx, ota_core.check(c, id_or_name))
+        emit(ctx, ota_core.check(c, id_or_name, timeout=timeout))
 
 
 @ota.command("update")
