@@ -7,7 +7,7 @@ of `cli-anything-homeassistant`. Python 3.10+, Click + paho-mqtt.
 
 ## Layout
 - `cli_anything/zigbee2mqtt/zigbee2mqtt_cli.py` — Click CLI + REPL (entry point `main`); 1,700+ lines, all command wiring.
-- `cli_anything/zigbee2mqtt/core/` — one module per command group: `mqtt_client.py` (`BridgeClient`, request/response correlation), `bridge.py`, `devices.py` (incl. `exposes` introspection + availability sweep), `attributes.py` (raw ZCL cluster read/write), `bindings.py`, `groups.py` (CRUD + groupcast set/get/state), `scenes.py` (Zigbee scene store/recall/add/rename/remove), `ota.py`, `admin.py`, `converters.py`, `extensions.py`, `install_code.py`, `k8s_backend.py` (kubectl helpers), `project.py` (local profile).
+- `cli_anything/zigbee2mqtt/core/` — one module per command group: `mqtt_client.py` (`BridgeClient`, request/response correlation), `bridge.py`, `devices.py` (incl. `exposes` introspection, availability sweep, `search_devices` inventory search, `identify` flash), `attributes.py` (raw ZCL cluster read/write), `bindings.py`, `groups.py` (CRUD + groupcast set/get/state), `scenes.py` (Zigbee scene store/recall/add/rename/remove), `ota.py`, `admin.py`, `converters.py`, `extensions.py`, `install_code.py`, `k8s_backend.py` (kubectl helpers), `project.py` (local profile).
 - `cli_anything/zigbee2mqtt/tests/` — `test_core.py`, `test_refine.py`, `test_full_e2e.py` (CliRunner end-to-end), plus focused regression/coverage suites. Run against a fake MQTT transport; no broker needed.
 - `cli_anything/zigbee2mqtt/skills/SKILL.md` and `skills/cli-anything-zigbee2mqtt/SKILL.md` — agent-facing skill docs (keep in sync with CLI changes).
 - `setup.py` is the only manifest (no pyproject/requirements). README.md (root) is the full command reference.

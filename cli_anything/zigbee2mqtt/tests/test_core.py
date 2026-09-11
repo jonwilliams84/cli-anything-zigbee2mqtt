@@ -2974,3 +2974,172 @@ class TestBatterySweep:
         started = _time.monotonic()
         devices_core.battery_sweep(c, duration=0.12)
         assert _time.monotonic() - started >= 0.1
+
+
+# ── devices.search_devices ──────────────────────────────────────────────────
+
+
+class TestSearchDevices:
+    LAMP = {
+        "friendly_name": "Lounge Lamp",
+        "ieee_address": "0xaaa",
+        "type": "Router",
+        "power_source": "Mains (single phase)",
+        "manufacturer": "IKEA of Sweden",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": "TRADFRI bulb E27",
+            "vendor": "IKEA",
+            "exposes": [
+                {
+                    "type": "light",
+                    "features": [
+                        {"property": "state", "access": 7},
+                        {"property": "brightness", "access": 7},
+                        {"property": "color_temp", "access": 7},
+                    ],
+                }
+            ],
+        },
+    }
+    SENSOR = {
+        "friendly_name": "Hall Temperature",
+        "ieee_address": "0xbbb",
+        "type": "EndDevice",
+        "power_source": "Battery",
+        "manufacturer": "_TZE200",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": "TS0201",
+            "vendor": "Tuya",
+            "exposes": [
+                {"property": "temperature", "access": 1},
+                {"property": "battery", "access": 1},
+            ],
+        },
+    }
+    UNSUPPORTED = {
+        "friendly_name": "Mystery Box",
+        "ieee_address": "0xccc",
+        "type": "EndDevice",
+        "power_source": "Battery",
+        "manufacturer": "Unknown",
+        "supported": False,
+        "disabled": True,
+        "definition": {"model": "MYS-1", "vendor": "NoName"},
+    }
+
+    def _all(self):
+        return [dict(self.LAMP), dict(self.SENSOR), dict(self.UNSUPPORTED)]
+
+    def test_no_filters_returns_everything(self):
+        result = devices_core.search_devices(self._all())
+        assert len(result) == 3
+
+    def test_like_matches_friendly_name_case_insensitive(self):
+        result = devices_core.search_devices(self._all(), like="hall temp")
+        assert [d["friendly_name"] for d in result] == ["Hall Temperature"]
+
+    def test_like_matches_ieee_address(self):
+        result = devices_core.search_devices(self._all(), like="0xbbb")
+        assert [d["friendly_name"] for d in result] == ["Hall Temperature"]
+
+    def test_manufacturer_substring(self):
+        result = devices_core.search_devices(self._all(), manufacturer="ikea")
+        assert [d["friendly_name"] for d in result] == ["Lounge Lamp"]
+
+    def test_model_substring(self):
+        result = devices_core.search_devices(self._all(), model="ts0201")
+        assert [d["friendly_name"] for d in result] == ["Hall Temperature"]
+
+    def test_vendor_substring(self):
+        result = devices_core.search_devices(self._all(), vendor="tuya")
+        assert [d["friendly_name"] for d in result] == ["Hall Temperature"]
+
+    def test_type_filter(self):
+        routers = devices_core.search_devices(self._all(), type_="router")
+        assert [d["friendly_name"] for d in routers] == ["Lounge Lamp"]
+        ends = devices_core.search_devices(self._all(), type_="EndDevice")
+        assert len(ends) == 2
+
+    def test_power_filter(self):
+        battery = devices_core.search_devices(self._all(), power="battery")
+        assert [d["friendly_name"] for d in battery] == ["Hall Temperature", "Mystery Box"]
+        mains = devices_core.search_devices(self._all(), power="mains")
+        assert [d["friendly_name"] for d in mains] == ["Lounge Lamp"]
+
+    def test_capability_matches_flattened_exposes(self):
+        rows = devices_core.search_devices(self._all(), capability="brightness")
+        assert [d["friendly_name"] for d in rows] == ["Lounge Lamp"]
+
+    def test_capability_substring_matches_family(self):
+        rows = devices_core.search_devices(self._all(), capability="color")
+        assert [d["friendly_name"] for d in rows] == ["Lounge Lamp"]
+
+    def test_capability_no_match_excludes_device(self):
+        rows = devices_core.search_devices(self._all(), capability="occupancy")
+        assert rows == []
+
+    def test_supported_flag_filters(self):
+        rows = devices_core.search_devices(self._all(), supported=False)
+        assert [d["friendly_name"] for d in rows] == ["Mystery Box"]
+
+    def test_disabled_flag_filters(self):
+        rows = devices_core.search_devices(self._all(), disabled=True)
+        assert [d["friendly_name"] for d in rows] == ["Mystery Box"]
+
+    def test_filters_combine(self):
+        rows = devices_core.search_devices(self._all(), power="battery", capability="temperature")
+        assert [d["friendly_name"] for d in rows] == ["Hall Temperature"]
+
+    def test_combined_filters_can_exclude_everything(self):
+        rows = devices_core.search_devices(self._all(), power="mains", capability="occupancy")
+        assert rows == []
+
+    def test_capability_matches_case_insensitively(self):
+        rows = devices_core.search_devices(self._all(), capability="COLOR_TEMP")
+        assert [d["friendly_name"] for d in rows] == ["Lounge Lamp"]
+
+
+# ── devices.identify ────────────────────────────────────────────────────────
+
+
+class _PublishOnlyClient:
+    base_topic = "zigbee2mqtt"
+
+    def __init__(self):
+        self.published: list[tuple[str, object]] = []
+
+    def publish(self, topic, payload, *, qos=0, retain=False):
+        self.published.append((topic, payload))
+        return 0
+
+
+class TestIdentify:
+    def test_default_payload_is_empty_identify(self):
+        c = _PublishOnlyClient()
+        result = devices_core.identify(c, "Lounge Lamp")
+        assert result["topic"] == "zigbee2mqtt/Lounge Lamp/set"
+        assert result["published"] == {"identify": {}}
+        assert result["friendly_name"] == "Lounge Lamp"
+
+    def test_duration_lands_in_payload(self):
+        c = _PublishOnlyClient()
+        result = devices_core.identify(c, "Hall Temperature", duration=5)
+        assert result["published"] == {"identify": {"duration": 5}}
+
+    def test_publishes_to_set_topic(self):
+        c = _PublishOnlyClient()
+        devices_core.identify(c, "Lamp")
+        assert c.published == [("zigbee2mqtt/Lamp/set", {"identify": {}})]
+
+    def test_rc_is_returned(self):
+        c = _PublishOnlyClient()
+        assert devices_core.identify(c, "Lamp")["rc"] == 0
+
+    def test_empty_name_raises(self):
+        c = _PublishOnlyClient()
+        with pytest.raises(ValueError):
+            devices_core.identify(c, "")

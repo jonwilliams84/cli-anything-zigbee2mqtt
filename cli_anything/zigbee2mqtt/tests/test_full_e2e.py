@@ -3156,3 +3156,198 @@ class TestDeviceBatteryCommand:
             payload = json.loads(state.output)
             assert payload["battery"] == 9
             assert payload["battery_low"] is True
+
+
+# ── device find / device identify (v0.6.0 refine) ───────────────────────────
+
+FIND_DEVICES = [
+    {
+        "friendly_name": "Lounge Lamp",
+        "ieee_address": "0xaaa",
+        "type": "Router",
+        "power_source": "Mains (single phase)",
+        "manufacturer": "IKEA of Sweden",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": "TRADFRI bulb E27",
+            "vendor": "IKEA",
+            "exposes": [
+                {
+                    "type": "light",
+                    "features": [
+                        {"property": "state", "access": 7},
+                        {"property": "brightness", "access": 7},
+                    ],
+                }
+            ],
+        },
+    },
+    {
+        "friendly_name": "Hall Temperature",
+        "ieee_address": "0xbbb",
+        "type": "EndDevice",
+        "power_source": "Battery",
+        "manufacturer": "_TZE200",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": "TS0201",
+            "vendor": "Tuya",
+            "exposes": [
+                {"property": "temperature", "access": 1},
+                {"property": "battery", "access": 1},
+            ],
+        },
+    },
+]
+
+
+class TestDeviceFind:
+    def _client(self):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(FIND_DEVICES))
+        return client
+
+    def test_find_no_filters_lists_everything(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "find"])
+            assert result.exit_code == 0, result.output
+            assert "Lounge Lamp" in result.output
+            assert "Hall Temperature" in result.output
+
+    def test_find_by_like(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "find", "--like", "lamp"])
+            assert result.exit_code == 0, result.output
+            assert "Lounge Lamp" in result.output
+            assert "Hall Temperature" not in result.output
+
+    def test_find_by_capability(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "device", "find", "--capability", "temperature"]
+            )
+            assert result.exit_code == 0, result.output
+            assert "Hall Temperature" in result.output
+            assert "Lounge Lamp" not in result.output
+
+    def test_find_by_power(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "device", "find", "--power", "battery"]
+            )
+            assert result.exit_code == 0, result.output
+            assert "Hall Temperature" in result.output
+
+    def test_find_json_output(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "find", "--like", "hall"]
+            )
+            assert result.exit_code == 0, result.output
+            rows = json.loads(result.output)
+            assert len(rows) == 1
+            assert rows[0]["friendly_name"] == "Hall Temperature"
+
+    def test_find_no_match_text_message(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "find", "--like", "zzz"])
+            assert result.exit_code == 0, result.output
+            assert "No devices match" in result.output
+
+    def test_find_no_match_json_empty_list(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "find", "--like", "zzz"]
+            )
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output) == []
+
+    def test_find_combines_filters(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "device", "find", "--power", "mains", "--model", "e27"],
+            )
+            assert result.exit_code == 0, result.output
+            assert "Lounge Lamp" in result.output
+            assert "Hall Temperature" not in result.output
+
+    def test_workflow_find_then_identify(self, fake_client):
+        """Find a device by capability, then flash it — the v0.6.0 pair."""
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            r = _runner()
+            found = r.invoke(
+                cli,
+                ["--json", "--mqtt-host", "x", "device", "find", "--capability", "brightness"],
+            )
+            assert found.exit_code == 0, found.output
+            name = json.loads(found.output)[0]["friendly_name"]
+            flash = r.invoke(cli, ["--mqtt-host", "x", "device", "identify", name])
+            assert flash.exit_code == 0, flash.output
+
+
+class TestDeviceIdentify:
+    def _client(self):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps([FIND_DEVICES[0]]))
+        return client
+
+    def test_identify_publishes_to_set_topic(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "device", "identify", "Lounge Lamp"]
+            )
+            assert result.exit_code == 0, result.output
+            assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"identify": {}})]
+            assert "Lounge Lamp" in result.output
+
+    def test_identify_with_duration(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "device", "identify", "Lounge Lamp", "--duration", "5"],
+            )
+            assert result.exit_code == 0, result.output
+            assert client.published == [
+                ("zigbee2mqtt/Lounge Lamp/set", {"identify": {"duration": 5.0}})
+            ]
+
+    def test_identify_accepts_ieee_address(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "identify", "0xaaa"])
+            assert result.exit_code == 0, result.output
+            # resolved to the friendly_name before publishing
+            assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"identify": {}})]
+
+    def test_identify_unknown_device_aborts(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "identify", "ghost"])
+            assert result.exit_code != 0
+            assert "no device" in result.output.lower()
+            assert client.published == []
+
+    def test_identify_json_output(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "identify", "Lounge Lamp"]
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["topic"] == "zigbee2mqtt/Lounge Lamp/set"
+            assert data["published"] == {"identify": {}}

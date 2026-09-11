@@ -32,6 +32,13 @@ cli-anything-zigbee2mqtt bridge info
 cli-anything-zigbee2mqtt device list
 cli-anything-zigbee2mqtt device show 'Lounge Lamp'
 
+# Search the inventory (local read of retained bridge/devices — combinable)
+cli-anything-zigbee2mqtt device find --power battery --capability temperature
+cli-anything-zigbee2mqtt --json device find --model 'TRADFRI' --type Router
+
+# Find it physically (device flashes via the Zigbee Identify cluster)
+cli-anything-zigbee2mqtt device identify 'Lounge Lamp' --duration 5
+
 # Rename a device (keeps HA unique_id, no entity re-discovery needed)
 cli-anything-zigbee2mqtt device rename 'Old Name' 'New Name'
 
@@ -83,7 +90,7 @@ cli-anything-zigbee2mqtt converter remove my-override.js
 | Group | Purpose |
 |---|---|
 | `bridge` | info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging |
-| `device` | list / show / rename / remove / configure / interview / options / set / get / watch / exposes / endpoints / clusters / reportings / read / write / bind / unbind / bindings |
+| `device` | list / find / show / rename / remove / configure / interview / options / set / get / state / watch / stale / battery / identify / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen |
 | `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state |
 | `scene` | list / store / recall / add / rename / remove / remove-all (Zigbee scenes on a device or group) |
 | `ota` | check / update / schedule / unschedule (`check --all` sweeps the network) |

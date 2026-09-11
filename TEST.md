@@ -20,8 +20,8 @@ This is exactly the CI gate; it must exit 0 before merge.
 
 | File | What it covers |
 |---|---|
-| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit**), groups, scenes, ota (check/update/schedule/unschedule **+ `check_all` network firmware sweep**), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
-| `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule` on the device the sweep surfaced) |
+| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit, `search_devices` inventory search, `identify` Identify-effect flash**), groups, scenes, ota (check/update/schedule/unschedule **+ `check_all` network firmware sweep**), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
+| `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule`, `device find --capability` → `device identify`) |
 | `test_cli_helpers.py` | CLI helper functions (`emit`, `_print_table`, `_parse_kv_fields`, …) |
 | `test_refine.py` | The v0.2.0 refine pass: bindings, generate-converter, configure-reporting, install codes, extensions, group options |
 | `test_coverage_boost.py` / `test_coverage_boost2.py` | Branch coverage for watch callbacks, malformed payloads, k8s backend |
@@ -80,3 +80,23 @@ This is exactly the CI gate; it must exit 0 before merge.
   `TestClassifyBattery` + `TestBatterySweep`) and 7 E2E/workflow
   (`test_full_e2e.py`: `TestDeviceBatteryCommand`, including the
   `battery --low-only` → `device state` confirm-a-low-device workflow).
+
+## Latest run (refine pass 5, 2026-09-11)
+
+- 923 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`)
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **device discovery & identification** —
+  `device find` (multi-criteria inventory search over the retained
+  `bridge/devices` payload: `--like`, `--manufacturer`, `--model`, `--vendor`,
+  `--type`, `--power`, `--capability` (matches flattened exposes property
+  names), `--supported/--unsupported`, `--disabled/--enabled`; all combinable,
+  all local — no round trip, works against sleeping devices) and
+  `device identify` (triggers the Zigbee Identify effect via
+  `{"identify": {"duration": N}}` published to `<base>/<name>/set`, resolving
+  IEEE addresses to friendly names first). Core functions
+  `search_devices` and `identify` in `core/devices.py`. 40 new tests:
+  21 unit (`test_core.py`: `TestSearchDevices` + `TestIdentify`) and
+  19 E2E/workflow (`test_full_e2e.py`: `TestDeviceFind` +
+  `TestDeviceIdentify`, including the
+  `find --capability brightness` → `identify` workflow).

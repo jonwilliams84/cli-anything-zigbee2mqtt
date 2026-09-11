@@ -996,3 +996,111 @@ def endpoint_summary(client: BridgeClient, ident: str, *, timeout: float = 5.0) 
         )
     rows.sort(key=lambda r: str(r["endpoint"]))
     return rows
+
+
+# ── device search (local filter over the retained inventory) ─────────────
+
+
+def _expose_properties(device: dict) -> set[str]:
+    """Property names a device's flattened exposes tree offers."""
+    defn = device.get("definition") or {}
+    return {row["property"] for row in flatten_exposes(defn.get("exposes"))}
+
+
+def search_devices(
+    devices: list[dict],
+    *,
+    like: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    model: Optional[str] = None,
+    vendor: Optional[str] = None,
+    type_: Optional[str] = None,
+    power: Optional[str] = None,
+    capability: Optional[str] = None,
+    supported: Optional[bool] = None,
+    disabled: Optional[bool] = None,
+) -> list[dict]:
+    """Filter the device inventory by any combination of criteria.
+
+    Pure function over the raw ``bridge/devices`` records — no round trip,
+    works against sleeping devices. All string filters are case-insensitive
+    substrings (so ``--power battery`` matches ``"Battery"``,
+    ``--capability color`` matches ``color_temp``); a ``None`` / empty filter
+    matches everything.
+
+    Criteria:
+
+    - ``like`` — substring on ``friendly_name`` or ``ieee_address``
+    - ``manufacturer`` — device record's ``manufacturer`` field
+    - ``model`` / ``vendor`` — from the device ``definition``
+    - ``type_`` — Zigbee role: ``EndDevice`` / ``Router`` / ``Coordinator``
+    - ``power`` — substring on ``power_source`` (e.g. ``battery``, ``mains``)
+    - ``capability`` — an exposes property name (e.g. ``brightness``,
+      ``color_temp``); matches any property containing the text
+    - ``supported`` / ``disabled`` — tri-state flags (``None`` = don't care)
+
+    Returns the matching raw device records, in inventory order.
+    """
+    needle = (like or "").lower()
+    manuf = (manufacturer or "").lower()
+    mdl = (model or "").lower()
+    vnd = (vendor or "").lower()
+    typ = (type_ or "").lower()
+    pwr = (power or "").lower()
+    cap = (capability or "").lower()
+
+    out: list[dict] = []
+    for d in devices:
+        defn = d.get("definition") or {}
+        if needle:
+            haystack = " ".join(
+                str(d.get(k, "")) for k in ("friendly_name", "ieee_address")
+            ).lower()
+            if needle not in haystack:
+                continue
+        if manuf and manuf not in str(d.get("manufacturer", "")).lower():
+            continue
+        if mdl and mdl not in str(defn.get("model", "")).lower():
+            continue
+        if vnd and vnd not in str(defn.get("vendor", "")).lower():
+            continue
+        if typ and typ not in str(d.get("type", "")).lower():
+            continue
+        if pwr and pwr not in str(d.get("power_source", "")).lower():
+            continue
+        if capability is not None and cap:
+            props = {p.lower() for p in _expose_properties(d)}
+            if not any(cap in p for p in props):
+                continue
+        if supported is not None and bool(d.get("supported")) is not supported:
+            continue
+        if disabled is not None and bool(d.get("disabled", False)) is not disabled:
+            continue
+        out.append(d)
+    return out
+
+
+# ── identify (Zigbee Identify effect via <name>/set) ─────────────────────
+
+
+def identify(
+    client: BridgeClient,
+    friendly_name: str,
+    *,
+    duration: Optional[float] = None,
+) -> dict:
+    """Trigger the Zigbee Identify effect so the device flashes.
+
+    Publishes ``{"identify": {}}`` (or ``{"identify": {"duration": N}}``) to
+    ``<base>/<friendly_name>/set`` — the documented z2m way to reach the
+    Identify cluster. Only devices that implement Identify (most bulbs,
+    some sensors) react; the publish itself always succeeds.
+
+    Returns ``{"friendly_name", "topic", "published", "rc"}``.
+    """
+    if not friendly_name:
+        raise ValueError("friendly_name is required")
+    topic = f"{client.base_topic}/{friendly_name}/set"
+    payload: dict = {"identify": {}} if duration is None else {"identify": {"duration": duration}}
+    rc = client.publish(topic, payload)
+    return {"friendly_name": friendly_name, "topic": topic, "published": payload, "rc": rc}
