@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here.
 
+## [0.6.0] — 2026-09-11
+
+- `device find`: multi-criteria search over the paired-device inventory.
+  Every filter is a local read of the retained `bridge/devices` payload — no
+  round trip, works against sleeping devices — and they all combine:
+  `--like` (substring on friendly_name / IEEE address), `--manufacturer`,
+  `--model`, `--vendor`, `--type` (EndDevice / Router / Coordinator),
+  `--power` (e.g. `battery`, `mains`), `--capability` (matches any flattened
+  exposes property, so `--capability color` finds `color_temp` too),
+  `--supported/--unsupported` and `--disabled/--enabled`. `--json` stays a
+  pure JSON list even with zero hits; text mode says "No devices match".
+- `device identify`: trigger the Zigbee Identify effect so a device flashes —
+  publishes `{"identify": {"duration": N}}` (or `{"identify": {}}`) to
+  `<base>/<name>/set`, the documented z2m way to reach the Identify cluster.
+  IEEE addresses are resolved to friendly names first, and an unknown device
+  aborts instead of publishing to a nonexistent topic. `--duration` tunes the
+  flash window; only devices implementing Identify (most bulbs, some sensors)
+  react.
+- Why it matters: the two commands compose —
+  `device find --capability brightness` → `device identify <name>` is the
+  answer to "what's this bulb actually called?" without touching the frontend.
+- Core functions `search_devices` and `identify` in `core/devices.py`.
+  40 new tests (21 unit + 19 E2E/workflow); total suite 923 passed, gate
+  green (coverage ≥ 80%, ruff check/format clean, bandit clean).
+
 ## [0.5.0] — 2026-09-06
 
 - `device battery`: network-wide battery audit. One `<base>/#` subscription

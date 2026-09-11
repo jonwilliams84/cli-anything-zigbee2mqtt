@@ -495,6 +495,87 @@ def device_list(ctx, full):
     emit(ctx, devices_core.summarize(rows))
 
 
+@device.command("find")
+@click.option("--like", help="Case-insensitive substring on friendly_name or IEEE address.")
+@click.option("--manufacturer", help="Match the device's manufacturer field (substring).")
+@click.option("--model", help="Match the definition model (substring).")
+@click.option("--vendor", help="Match the definition vendor (substring).")
+@click.option("--type", "type_", help="Match the Zigbee type, e.g. EndDevice / Router.")
+@click.option("--power", help="Match power_source, e.g. battery / mains.")
+@click.option(
+    "--capability",
+    help="Match an exposes property, e.g. brightness, color_temp, occupancy.",
+)
+@click.option(
+    "--supported/--unsupported",
+    "supported",
+    default=None,
+    help="Filter by converter support.",
+)
+@click.option(
+    "--disabled/--enabled",
+    "disabled",
+    default=None,
+    help="Filter by the disabled flag.",
+)
+@click.pass_context
+def device_find(
+    ctx, like, manufacturer, model, vendor, type_, power, capability, supported, disabled
+):
+    """Search the paired-device inventory by name / model / power / capability.
+
+    All filters combine and are local reads of the retained bridge/devices
+    payload — no round trip, works against sleeping devices.
+
+    Example: device find --power battery --capability temperature
+    """
+    with make_client(ctx) as c:
+        found = devices_core.search_devices(
+            devices_core.list_devices(c),
+            like=like,
+            manufacturer=manufacturer,
+            model=model,
+            vendor=vendor,
+            type_=type_,
+            power=power,
+            capability=capability,
+            supported=supported,
+            disabled=disabled,
+        )
+    if not found:
+        if ctx.obj.get("as_json"):
+            emit(ctx, [])
+            return
+        click.echo("No devices match the given filters.")
+        return
+    emit(ctx, devices_core.summarize(found))
+
+
+@device.command("identify")
+@click.argument("ident")
+@click.option(
+    "--duration",
+    type=float,
+    default=None,
+    help="Seconds the device flashes (some devices cap it, e.g. 5).",
+)
+@click.pass_context
+def device_identify(ctx, ident, duration):
+    """Trigger the Identify effect (device flashes) so you can find it physically.
+
+    Publishes {"identify": {...}} to <base>/<name>/set — only devices that
+    implement the Identify cluster (most bulbs, some sensors) react.
+    """
+    with make_client(ctx) as c:
+        dev = devices_core.show(c, ident)
+        if not dev:
+            _abort(f"no device matching {ident!r}")
+        emit(
+            ctx,
+            devices_core.identify(c, dev.get("friendly_name") or ident, duration=duration),
+        )
+
+
 @device.command("ieee")
 @click.pass_context
 @click.argument("ident")
