@@ -1104,3 +1104,179 @@ def identify(
     payload: dict = {"identify": {}} if duration is None else {"identify": {"duration": duration}}
     rc = client.publish(topic, payload)
     return {"friendly_name": friendly_name, "topic": topic, "published": payload, "rc": rc}
+
+
+# ── lighting control (convenience layer over <base>/<name>/set) ──────────
+#
+# z2m lights expose the standard Zigbee properties on their set topic:
+# state (ON/OFF/TOGGLE), brightness (0-254), color and color_temp (mireds,
+# lower = cooler). These helpers validate and build the payload BEFORE any
+# MQTT connection is opened, so a bad argument reports the real problem
+# instead of a broker connection error. All accept IEEE addresses upstream:
+# the CLI resolves them to friendly names first (see devices.show).
+
+
+NAMED_COLORS: dict[str, tuple[int, int, int]] = {
+    "red": (255, 0, 0),
+    "green": (0, 128, 0),
+    "lime": (0, 255, 0),
+    "blue": (0, 0, 255),
+    "cyan": (0, 255, 255),
+    "magenta": (255, 0, 255),
+    "yellow": (255, 255, 0),
+    "orange": (255, 165, 0),
+    "amber": (255, 191, 0),
+    "pink": (255, 192, 203),
+    "purple": (128, 0, 128),
+    "violet": (238, 130, 238),
+    "teal": (0, 128, 128),
+    "white": (255, 255, 255),
+}
+
+BRIGHTNESS_MIN = 0
+BRIGHTNESS_MAX = 254  # the standard Zigbee brightness ceiling (255 = "max", not a set level)
+COLOR_TEMP_MIN = 150  # mireds — the range z2m bulbs commonly accept (≈ 6667K … 2000K)
+COLOR_TEMP_MAX = 500
+
+
+def kelvin_to_mireds(kelvin: float) -> int:
+    """Convert a colour temperature from Kelvin to mireds (1000K–20000K)."""
+    try:
+        k = float(kelvin)
+    except (TypeError, ValueError):
+        raise ValueError(f"kelvin must be a number, got {kelvin!r}") from None
+    if not 1000 <= k <= 20000:
+        raise ValueError(f"kelvin must be between 1000 and 20000, got {kelvin!r}")
+    return round(1_000_000 / k)
+
+
+def parse_color(value: str) -> dict:
+    """Parse a color argument into a z2m ``{"color": {"r","g","b"}}`` object.
+
+    Accepts a named color (``red``), a hex string (``#ff8800`` or
+    ``ff8800``), or a comma-separated RGB triple (``255,136,0``).
+    Raises ``ValueError`` for anything else.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("color must be a name, '#rrggbb' or 'r,g,b' value")
+    v = value.strip().lower()
+    if v in NAMED_COLORS:
+        r, g, b = NAMED_COLORS[v]
+        return {"r": r, "g": g, "b": b}
+    if "," in v:
+        parts = v.split(",")
+        if len(parts) != 3:
+            raise ValueError(f"rgb color needs exactly 3 comma-separated values, got {value!r}")
+        try:
+            rgb = [int(p.strip()) for p in parts]
+        except ValueError:
+            raise ValueError(f"rgb color values must be integers, got {value!r}") from None
+        if not all(0 <= n <= 255 for n in rgb):
+            raise ValueError(f"rgb color values must be in 0-255, got {value!r}")
+        return {"r": rgb[0], "g": rgb[1], "b": rgb[2]}
+    hexv = v[1:] if v.startswith("#") else v
+    if len(hexv) == 6:
+        try:
+            return {
+                "r": int(hexv[0:2], 16),
+                "g": int(hexv[2:4], 16),
+                "b": int(hexv[4:6], 16),
+            }
+        except ValueError:
+            pass
+    raise ValueError(f"unrecognised color {value!r}; use a name, '#rrggbb' or 'r,g,b'")
+
+
+def check_brightness(value) -> int:
+    """Validate a Zigbee brightness (0-254)."""
+    try:
+        b = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"brightness must be an integer, got {value!r}") from None
+    if not BRIGHTNESS_MIN <= b <= BRIGHTNESS_MAX:
+        raise ValueError(
+            f"brightness must be between {BRIGHTNESS_MIN} and {BRIGHTNESS_MAX}, got {value!r}"
+        )
+    return b
+
+
+def check_color_temp(value) -> int:
+    """Validate a colour temperature in mireds (150-500)."""
+    try:
+        m = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"color_temp must be an integer, got {value!r}") from None
+    if not COLOR_TEMP_MIN <= m <= COLOR_TEMP_MAX:
+        raise ValueError(
+            f"color_temp must be between {COLOR_TEMP_MIN} and {COLOR_TEMP_MAX} mireds, "
+            f"got {value!r}"
+        )
+    return m
+
+
+def check_transition(value) -> Optional[float]:
+    """Validate a transition time in seconds (None means 'device default')."""
+    if value is None:
+        return None
+    try:
+        t = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"transition must be a number of seconds, got {value!r}") from None
+    if t < 0:
+        raise ValueError(f"transition must be >= 0 seconds, got {value!r}")
+    return t
+
+
+def light_payload(
+    *,
+    state=None,
+    brightness=None,
+    color=None,
+    color_temp=None,
+    kelvin: bool = False,
+    transition=None,
+) -> dict:
+    """Build and validate a light command payload for ``<base>/<name>/set``.
+
+    Exactly one of ``state`` (ON / OFF / TOGGLE), ``brightness`` (0-254),
+    ``color`` (name / hex / 'r,g,b') or ``color_temp`` (mireds, or Kelvin
+    when ``kelvin=True``) must be given; ``transition`` (seconds) is
+    optional and composes with any of them. Raises ``ValueError`` with a
+    user-facing message for anything invalid — the CLI calls this BEFORE
+    opening the MQTT connection.
+    """
+    payload: dict = {}
+    if state is not None:
+        s = str(state).upper()
+        if s not in ("ON", "OFF", "TOGGLE"):
+            raise ValueError(f"state must be ON, OFF or TOGGLE, got {state!r}")
+        payload["state"] = s
+    if brightness is not None:
+        payload["brightness"] = check_brightness(brightness)
+    if color is not None:
+        payload["color"] = parse_color(color)
+    if color_temp is not None:
+        mireds = kelvin_to_mireds(color_temp) if kelvin else color_temp
+        payload["color_temp"] = check_color_temp(mireds)
+    if not payload:
+        raise ValueError("no light property given (state/brightness/color/color_temp)")
+    t = check_transition(transition)
+    if t is not None:
+        payload["transition"] = t
+    return payload
+
+
+def set_light(client: BridgeClient, friendly_name: str, payload: dict) -> dict:
+    """Publish a validated light payload to ``<base>/<friendly_name>/set``.
+
+    Returns ``{"friendly_name", "topic", "published", "rc"}`` (same shape as
+    :func:`identify`); the device itself confirms by publishing new state,
+    which you can read with ``device state``.
+    """
+    if not friendly_name:
+        raise ValueError("friendly_name is required")
+    if not payload:
+        raise ValueError("payload must be a non-empty dict")
+    topic = f"{client.base_topic}/{friendly_name}/set"
+    rc = client.publish(topic, payload)
+    return {"friendly_name": friendly_name, "topic": topic, "published": payload, "rc": rc}

@@ -19,6 +19,7 @@ agent can reliably tell whether an operation succeeded.
 - Finding out which properties a device accepts before writing to it
   (`device exposes`) — including units, ranges and enum values.
 - Searching the paired-device inventory by name, model, vendor, power source or exposes capability (`device find`) and flashing a device to find it physically (`device identify`).
+- Driving lights without hand-writing `device set` payloads (`device on` / `off` / `toggle` / `brightness` / `color` / `color-temp`).
 - Checking which devices are unreachable right now (`device availability-sweep`).
 - Finding which endpoints and clusters a device has, and which cluster/attribute
   names z2m will accept (`device endpoints`, `device clusters`, `bridge definitions`).
@@ -48,7 +49,7 @@ Two external deps:
 | Group | Examples |
 |---|---|
 | `bridge` | `bridge info`, `bridge state`, `bridge restart`, `bridge restart --via-kubectl`, `bridge health`, `bridge options-get`, `bridge options-set '{"advanced":{"log_level":"info"}}'`, `bridge definitions`, `bridge definitions --cluster genOnOff [--commands]`, `bridge definitions --custom`, `bridge watch-events --duration 30`, `bridge watch-logging --duration 10` |
-| `device` | `device list`, `device list --full`, `device show <name>`, `device find [--like lamp] [--manufacturer X] [--model M] [--vendor V] [--type Router] [--power battery] [--capability brightness] [--supported] [--disabled]` (inventory search, combinable, local read), `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device identify <name> [--duration 5]` (flash the device via the Zigbee Identify cluster), `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]`, `device exposes <name> --settable`, `device endpoints <name>`, `device clusters <name> --direction input|output`, `device reportings [<name>]`, `device availability <name>`, `device availability-sweep --offline-only`, `device read <name> --cluster genBasic --attribute zclVersion`, `device write <name> --cluster genOnOff onOff=1`, `device disable <name>`, `device enable <name>`, `device last-seen <name>` |
+| `device` | `device list`, `device list --full`, `device show <name>`, `device find [--like lamp] [--manufacturer X] [--model M] [--vendor V] [--type Router] [--power battery] [--capability brightness] [--supported] [--disabled]` (inventory search, combinable, local read), `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device identify <name> [--duration 5]` (flash the device via the Zigbee Identify cluster), `device on <name> [--transition S]`, `device off <name> [--transition S]`, `device toggle <name>`, `device brightness <name> 0-254 [--transition S]`, `device color <name> red|#ff8800|'255,136,0' [--transition S]`, `device color-temp <name> mireds [--kelvin] [--transition S]` (lighting shortcuts, values validated before any MQTT connection), `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]`, `device exposes <name> --settable`, `device endpoints <name>`, `device clusters <name> --direction input|output`, `device reportings [<name>]`, `device availability <name>`, `device availability-sweep --offline-only`, `device read <name> --cluster genBasic --attribute zclVersion`, `device write <name> --cluster genOnOff onOff=1`, `device disable <name>`, `device enable <name>`, `device last-seen <name>` |
 | `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained) |
 | `scene` | `scene list <target>`, `scene store <target> <id> --name Chill`, `scene recall <target> <id>`, `scene add <target> <id> --state ON --brightness 200 --color-temp 370 --transition 2`, `scene rename <target> <id> <name>`, `scene remove <target> <id>`, `scene remove-all <target> --yes` — TARGET is a device or group friendly_name; add `--endpoint <n>` for multi-gang devices |
 | `ota` | `ota check <name>`, `ota check --all` (network firmware sweep), `ota check --all --with-update`, `ota update <name>`, `ota schedule <name>`, `ota unschedule <name>` |
@@ -130,6 +131,14 @@ device rejects the frame. Prefer the modelled property via `device set` whenever
 **`ota unschedule` backs out a queued update.** A `schedule` stays pending until
 the device next checks in (hours, on battery), so cancel with `ota unschedule
 <name>` rather than waiting it out.
+
+**Lighting shortcuts validate before they connect.** `device on/off/toggle/
+brightness/color/color-temp` accept IEEE addresses (resolved to the friendly
+name first) and build their payload up-front — `device brightness <name> 255`
+aborts with "between 0 and 254" before any broker connection is opened. They
+publish to `<base>/<name>/set` like `device set` (no bridge/response), so
+confirm with `device state <name>`. Whole-room changes still belong in a
+`group set` groupcast.
 
 **`ota check --all` sweeps the whole network for firmware.** One
 `device/ota_update/check` round trip per device (coordinator and disabled
@@ -338,4 +347,24 @@ cli-anything-zigbee2mqtt scene add kitchen-lights 2 --name Dinner \
 cli-anything-zigbee2mqtt install-code add "G$M001 1234ABCD..."
 cli-anything-zigbee2mqtt network permit-join on --time 120
 # Now put the device in pairing mode.
+```
+
+### Drive a light (lighting shortcuts)
+
+```bash
+# Which lights can I drive? (local inventory read)
+cli-anything-zigbee2mqtt --json device find --capability brightness \
+  | jq '.[].friendly_name'
+
+# The shortcuts accept friendly names or IEEE addresses, and validate the
+# values BEFORE any MQTT connection is opened.
+cli-anything-zigbee2mqtt device on 'Lounge Lamp'
+cli-anything-zigbee2mqtt device brightness 'Lounge Lamp' 128 --transition 2
+cli-anything-zigbee2mqtt device color 'Lounge Lamp' #ff8800   # or 'red', '255,136,0'
+cli-anything-zigbee2mqtt device color-temp 'Lounge Lamp' 370  # mireds; add --kelvin for Kelvin
+cli-anything-zigbee2mqtt device toggle '0xa4c1382132ff0994'
+cli-anything-zigbee2mqtt device off 'Lounge Lamp' --transition 2
+
+# Confirm the device took the command.
+cli-anything-zigbee2mqtt device state 'Lounge Lamp'
 ```

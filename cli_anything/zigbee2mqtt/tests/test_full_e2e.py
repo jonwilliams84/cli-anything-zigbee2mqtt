@@ -3351,3 +3351,167 @@ class TestDeviceIdentify:
             data = json.loads(result.output)
             assert data["topic"] == "zigbee2mqtt/Lounge Lamp/set"
             assert data["published"] == {"identify": {}}
+
+
+# ── lighting convenience commands (v0.7.0 refine) ────────────────────────────
+
+
+class TestLightingCommands:
+    """device on / off / toggle / brightness / color / color-temp."""
+
+    def _client(self):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps([FIND_DEVICES[0]]))
+        return client
+
+    def _run(self, client, *args, as_json=False):
+        argv = (["--json"] if as_json else []) + ["--mqtt-host", "x", *args]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            return _runner().invoke(cli, argv)
+
+    def test_on_publishes_state_on(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "on", "Lounge Lamp")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"state": "ON"})]
+
+    def test_off_with_transition(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "off", "Lounge Lamp", "--transition", "2.5")
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/Lounge Lamp/set", {"state": "OFF", "transition": 2.5})
+        ]
+
+    def test_toggle(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "toggle", "Lounge Lamp")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"state": "TOGGLE"})]
+
+    def test_brightness(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "brightness", "Lounge Lamp", "128")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"brightness": 128})]
+
+    def test_brightness_with_transition(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "brightness", "Lounge Lamp", "10", "--transition", "1")
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/Lounge Lamp/set", {"brightness": 10, "transition": 1.0})
+        ]
+
+    def test_brightness_out_of_range_aborts_before_connect(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "brightness", "Lounge Lamp", "255")
+        assert result.exit_code != 0
+        assert "between 0 and 254" in result.output
+        assert client.published == []
+
+    def test_brightness_non_integer_rejected_by_click(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "brightness", "Lounge Lamp", "bright")
+        assert result.exit_code != 0
+        assert client.published == []
+
+    def test_color_hex(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "color", "Lounge Lamp", "#ff8800")
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/Lounge Lamp/set", {"color": {"r": 255, "g": 136, "b": 0}})
+        ]
+
+    def test_color_named(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "color", "Lounge Lamp", "red")
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/Lounge Lamp/set", {"color": {"r": 255, "g": 0, "b": 0}})
+        ]
+
+    def test_color_rgb_triple(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "color", "Lounge Lamp", "0,128,255")
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/Lounge Lamp/set", {"color": {"r": 0, "g": 128, "b": 255}})
+        ]
+
+    def test_color_invalid_aborts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "color", "Lounge Lamp", "sparkly")
+        assert result.exit_code != 0
+        assert "unrecognised color" in result.output
+        assert client.published == []
+
+    def test_color_temp_mireds(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "color-temp", "Lounge Lamp", "370")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"color_temp": 370})]
+
+    def test_color_temp_kelvin_converts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "color-temp", "Lounge Lamp", "2700", "--kelvin")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"color_temp": 370})]
+
+    def test_color_temp_kelvin_out_of_range_aborts(self, fake_client):
+        client = self._client()
+        # 800K → 1250 mireds, beyond any lamp's range
+        result = self._run(client, "device", "color-temp", "Lounge Lamp", "800", "--kelvin")
+        assert result.exit_code != 0
+        assert client.published == []
+
+    def test_accepts_ieee_address(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "on", "0xaaa")
+        assert result.exit_code == 0, result.output
+        # resolved to the friendly_name before publishing
+        assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"state": "ON"})]
+
+    def test_unknown_device_aborts_without_publish(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "on", "ghost")
+        assert result.exit_code != 0
+        assert "no device" in result.output.lower()
+        assert client.published == []
+
+    def test_json_output_shape(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "brightness", "Lounge Lamp", "128", as_json=True)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["topic"] == "zigbee2mqtt/Lounge Lamp/set"
+        assert data["published"] == {"brightness": 128}
+        assert data["friendly_name"] == "Lounge Lamp"
+        assert data["rc"] == 0
+
+    def test_workflow_find_then_dim(self, fake_client):
+        """`device find --capability brightness` → `device brightness <name>`."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(FIND_DEVICES))
+        r = _runner()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            found = r.invoke(
+                cli,
+                ["--json", "--mqtt-host", "x", "device", "find", "--capability", "brightness"],
+            )
+            assert found.exit_code == 0, found.output
+            name = json.loads(found.output)[0]["friendly_name"]
+            dim = r.invoke(
+                cli, ["--mqtt-host", "x", "device", "brightness", name, "64", "--transition", "2"]
+            )
+            assert dim.exit_code == 0, dim.output
+            assert client.published == [
+                ("zigbee2mqtt/Lounge Lamp/set", {"brightness": 64, "transition": 2.0})
+            ]
+
+    def test_help_lists_lighting_commands(self, fake_client):
+        result = _runner().invoke(cli, ["device", "--help"])
+        assert result.exit_code == 0, result.output
+        for cmd in ("on", "off", "toggle", "brightness", "color", "color-temp"):
+            assert cmd in result.output

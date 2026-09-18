@@ -38,7 +38,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | Group | Examples |
 |---|---|
 | `bridge` | `info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging` |
-| `device` | `list / find / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / identify / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
+| `device` | `list / find / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / identify / on / off / toggle / brightness / color / color-temp / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state` |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check [name \| --all] / update / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware |
@@ -76,6 +76,14 @@ cli-anything-zigbee2mqtt device rename 'Old Name' 'New Name'
 # Send / read state
 cli-anything-zigbee2mqtt device set 'Lounge Lamp' state=ON brightness=180
 cli-anything-zigbee2mqtt device get 'Lounge Lamp' state brightness
+
+# Lighting shortcuts (IEEE addresses work too; values are validated first)
+cli-anything-zigbee2mqtt device on 'Lounge Lamp'
+cli-anything-zigbee2mqtt device toggle 'Lounge Lamp'
+cli-anything-zigbee2mqtt device brightness 'Lounge Lamp' 128 --transition 2
+cli-anything-zigbee2mqtt device color 'Lounge Lamp' #ff8800        # or 'red' or '255,136,0'
+cli-anything-zigbee2mqtt device color-temp 'Lounge Lamp' 370       # mireds (lower = cooler)
+cli-anything-zigbee2mqtt device color-temp 'Lounge Lamp' 2700 --kelvin
 
 # OTA
 cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom'
@@ -254,7 +262,7 @@ cli_anything/zigbee2mqtt/
 ├── core/
 │   ├── mqtt_client.py      # BridgeClient — MQTT request/response correlation
 │   ├── bridge.py           # info/state/restart/health/options/watch
-│   ├── devices.py          # list/show/rename/remove/configure/interview/set/get
+│   ├── devices.py          # list/show/rename/remove/configure/interview/set/get + on/off/toggle/brightness/color/color-temp
 │   │                       # + state (retained one-shot) / stale / generate-converter
 │   │                       # / configure-reporting / exposes (local introspection)
 │   │                       # / availability + availability_sweep
@@ -279,6 +287,7 @@ cli_anything/zigbee2mqtt/
 Every *bridge* mutation is a `zigbee2mqtt/bridge/request/<path>` publish correlated
 by a `transaction` id, with the response read from
 `zigbee2mqtt/bridge/response/<path>`. Device/group commands — `device set`,
+`device on/off/toggle/brightness/color/color-temp`,
 `group set`, and every `scene` subcommand — are Zigbee cluster commands instead,
 so they publish to `<base>/<target>/set` (or `<base>/<target>/<endpoint>/set`) and
 have no response topic; verify them by reading the target's retained state
@@ -292,13 +301,16 @@ filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-645 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
+679 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
 a fake MQTT transport, every mutator in bindings / install_code / extensions /
 groups / scenes / attributes, the read-side helpers in devices.py (read_state /
 find_stale / exposes / availability_sweep / battery_sweep /
-generate_external_definition / configure_reporting), and multi-command workflows (create group → add member →
+generate_external_definition / configure_reporting), the lighting
+convenience layer (on/off/toggle/brightness/color/color-temp), and
+multi-command workflows (create group → add member →
 groupcast set → store/recall scene; `device exposes` → `device set`; raw
-`device read` → `device state` read-back). No broker and no kubectl needed.
+`device read` → `device state` read-back; `device find --capability
+brightness` → `device brightness <name>`). No broker and no kubectl needed.
 
 ## Releases
 

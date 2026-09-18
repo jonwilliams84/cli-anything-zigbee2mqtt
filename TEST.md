@@ -100,3 +100,22 @@ This is exactly the CI gate; it must exit 0 before merge.
   19 E2E/workflow (`test_full_e2e.py`: `TestDeviceFind` +
   `TestDeviceIdentify`, including the
   `find --capability brightness` → `identify` workflow).
+
+## Latest run (refine pass 6 / v0.7.0, 2026-09-18)
+
+- 976 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`)
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **lighting convenience layer** — `device on` / `off` /
+  `toggle` / `brightness` / `color` / `color-temp`, a validated shortcut
+  layer over the raw `device set` payload format. Core functions
+  `light_payload` / `set_light` / `parse_color` / `kelvin_to_mireds` /
+  `check_brightness` / `check_color_temp` / `check_transition` in
+  `core/devices.py`; payloads are validated before any MQTT connection is
+  opened, IEEE addresses are resolved to friendly names first, and unknown
+  devices abort without publishing. 53 new tests: 34 unit
+  (`test_core.py`: `TestKelvinToMireds`, `TestParseColor`,
+  `TestCheckHelpers`, `TestLightPayload`, `TestSetLight`) and 19
+  E2E/workflow (`test_full_e2e.py`: `TestLightingCommands`, including the
+  `device find --capability brightness` → `device brightness <name>` dim
+  workflow and the validate-before-connect aborts).

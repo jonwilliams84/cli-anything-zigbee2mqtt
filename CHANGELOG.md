@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented here.
 
+## [0.7.0] — 2026-09-18
+
+- Lighting convenience layer: `device on / off / toggle / brightness / color /
+  color-temp`. Until now the only way to drive a bulb was hand-writing a
+  `device set` payload (`device set 'Lounge Lamp' state=ON brightness=128`) or
+  a raw `device write` on the genOnOff/genLevelCtrl clusters. The new
+  shortcuts cover the everyday cases with validated arguments:
+  - `device on <name> [--transition S]` / `device off` / `device toggle`
+    publish `{"state": "ON" | "OFF" | "TOGGLE"}`.
+  - `device brightness <name> 0-254 [--transition S]` — the standard Zigbee
+    range; `255` is rejected ("max" is not a settable level on z2m).
+  - `device color <name> red | #ff8800 | '255,136,0' [--transition S]` —
+    named colors, hex or RGB triples, all normalised to the
+    `{"color": {"r","g","b"}}` object z2m expects.
+  - `device color-temp <name> <mireds> [--kelvin] [--transition S]` — mireds
+    150-500 (lower = cooler); `--kelvin` converts (e.g. `2700 --kelvin` →
+    `color_temp 370`).
+  All six resolve IEEE addresses to friendly names first (same as
+  `device identify`), so `device toggle 0xa4c138…` works, and an unknown
+  device aborts instead of publishing to a nonexistent topic. Payloads are
+  validated BEFORE any MQTT connection is opened — `device brightness <name>
+  255` reports "brightness must be between 0 and 254" rather than a broker
+  connection error. Output is `{"friendly_name", "topic", "published",
+  "rc"}` (same shape as `device identify`); like `device set` there is no
+  bridge/response, so confirm with `device state <name>`. Room-wide changes
+  still belong in a `group set` groupcast.
+- Core functions `light_payload`, `set_light`, `parse_color`,
+  `kelvin_to_mireds`, `check_brightness`, `check_color_temp`,
+  `check_transition` in `core/devices.py`.
+- Why it matters: `device find --capability brightness` → `device brightness
+  <name> 128` is now a two-command light-dimming one-liner instead of
+  property-name archaeology.
+- 53 new tests (34 unit + 19 E2E/workflow); total suite 976 passed, gate
+  green (coverage 99.3%, ruff check/format clean, bandit clean).
+
 ## [0.6.0] — 2026-09-11
 
 - `device find`: multi-criteria search over the paired-device inventory.
