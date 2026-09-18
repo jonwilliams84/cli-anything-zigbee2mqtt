@@ -576,6 +576,118 @@ def device_identify(ctx, ident, duration):
         )
 
 
+def _light_emit(ctx: click.Context, ident: str, payload: dict) -> None:
+    """Resolve an ident (friendly name or IEEE) and publish a light payload.
+
+    Shared by the lighting convenience commands; aborts with exit 1 when the
+    device is unknown instead of publishing to a nonexistent topic.
+    """
+    with make_client(ctx) as c:
+        dev = devices_core.show(c, ident)
+        if not dev:
+            _abort(f"no device matching {ident!r}")
+            return
+        emit(ctx, devices_core.set_light(c, dev.get("friendly_name") or ident, payload))
+
+
+@device.command("on")
+@click.argument("ident")
+@click.option("--transition", type=float, default=None, help="Seconds to fade in.")
+@click.pass_context
+def device_on(ctx, ident, transition):
+    """Turn a light on (publishes {"state": "ON"} to <base>/<name>/set).
+
+    IDENT is a friendly name or IEEE address. Only devices exposing the
+    light/brightness feature react — check `device exposes <name> --settable`.
+    """
+    try:
+        payload = devices_core.light_payload(state="ON", transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("off")
+@click.argument("ident")
+@click.option("--transition", type=float, default=None, help="Seconds to fade out.")
+@click.pass_context
+def device_off(ctx, ident, transition):
+    """Turn a light off (publishes {"state": "OFF"} to <base>/<name>/set)."""
+    try:
+        payload = devices_core.light_payload(state="OFF", transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("toggle")
+@click.argument("ident")
+@click.pass_context
+def device_toggle(ctx, ident):
+    """Flip a light between on and off (publishes {"state": "TOGGLE"})."""
+    try:
+        payload = devices_core.light_payload(state="TOGGLE")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("brightness")
+@click.argument("ident")
+@click.argument("level", type=int)
+@click.option("--transition", type=float, default=None, help="Seconds to fade to the level.")
+@click.pass_context
+def device_brightness(ctx, ident, level, transition):
+    """Set a light's brightness (0-254, the standard Zigbee range)."""
+    try:
+        payload = devices_core.light_payload(brightness=level, transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("color")
+@click.argument("ident")
+@click.argument("color")
+@click.option("--transition", type=float, default=None, help="Seconds to fade to the color.")
+@click.pass_context
+def device_color(ctx, ident, color, transition):
+    """Set a light's color: named (red), hex (#ff8800) or '255,136,0'."""
+    try:
+        payload = devices_core.light_payload(color=color, transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("color-temp")
+@click.argument("ident")
+@click.argument("mireds", type=int)
+@click.option(
+    "--kelvin", is_flag=True, default=False, help="Interpret the value as Kelvin, not mireds."
+)
+@click.option("--transition", type=float, default=None, help="Seconds to fade.")
+@click.pass_context
+def device_color_temp(ctx, ident, mireds, kelvin, transition):
+    """Set a light's colour temperature in mireds (150-500; lower = cooler).
+
+    With --kelvin the value is read in Kelvin (1000-20000) and converted.
+    """
+    try:
+        payload = devices_core.light_payload(
+            color_temp=mireds, kelvin=kelvin, transition=transition
+        )
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
 @device.command("ieee")
 @click.pass_context
 @click.argument("ident")

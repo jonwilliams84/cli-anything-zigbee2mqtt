@@ -3143,3 +3143,177 @@ class TestIdentify:
         c = _PublishOnlyClient()
         with pytest.raises(ValueError):
             devices_core.identify(c, "")
+
+
+# ── devices lighting control (convenience layer over <name>/set) ────────────
+
+
+class TestKelvinToMireds:
+    def test_common_values(self):
+        assert devices_core.kelvin_to_mireds(2700) == 370
+        assert devices_core.kelvin_to_mireds(6500) == 154
+        assert devices_core.kelvin_to_mireds(2000) == 500
+
+    def test_out_of_range_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.kelvin_to_mireds(999)
+        with pytest.raises(ValueError):
+            devices_core.kelvin_to_mireds(20001)
+
+    def test_non_numeric_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.kelvin_to_mireds("warm")
+
+
+class TestParseColor:
+    def test_named_color(self):
+        assert devices_core.parse_color("red") == {"r": 255, "g": 0, "b": 0}
+        assert devices_core.parse_color("AMBER") == {"r": 255, "g": 191, "b": 0}
+
+    def test_hex_with_hash(self):
+        assert devices_core.parse_color("#ff8800") == {"r": 255, "g": 136, "b": 0}
+
+    def test_hex_without_hash(self):
+        assert devices_core.parse_color("FF8800") == {"r": 255, "g": 136, "b": 0}
+
+    def test_rgb_triple(self):
+        assert devices_core.parse_color("255, 136, 0") == {"r": 255, "g": 136, "b": 0}
+
+    def test_rgb_rejects_out_of_range(self):
+        with pytest.raises(ValueError):
+            devices_core.parse_color("256,0,0")
+        with pytest.raises(ValueError):
+            devices_core.parse_color("-1,0,0")
+
+    def test_rgb_rejects_wrong_arity(self):
+        with pytest.raises(ValueError):
+            devices_core.parse_color("1,2")
+        with pytest.raises(ValueError):
+            devices_core.parse_color("1,2,3,4")
+
+    def test_rgb_rejects_non_integers(self):
+        with pytest.raises(ValueError):
+            devices_core.parse_color("a,b,c")
+
+    def test_garbage_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.parse_color("sparkly")
+        with pytest.raises(ValueError):
+            devices_core.parse_color("")
+        with pytest.raises(ValueError):
+            devices_core.parse_color(None)
+
+
+class TestCheckHelpers:
+    def test_brightness_valid(self):
+        assert devices_core.check_brightness(0) == 0
+        assert devices_core.check_brightness("254") == 254
+
+    def test_brightness_out_of_range(self):
+        with pytest.raises(ValueError):
+            devices_core.check_brightness(255)
+        with pytest.raises(ValueError):
+            devices_core.check_brightness(-1)
+
+    def test_brightness_non_integer(self):
+        with pytest.raises(ValueError):
+            devices_core.check_brightness("bright")
+
+    def test_color_temp_valid(self):
+        assert devices_core.check_color_temp(153) == 153
+        assert devices_core.check_color_temp(500) == 500
+
+    def test_color_temp_out_of_range(self):
+        with pytest.raises(ValueError):
+            devices_core.check_color_temp(149)
+        with pytest.raises(ValueError):
+            devices_core.check_color_temp(501)
+
+    def test_transition_none_passes_through(self):
+        assert devices_core.check_transition(None) is None
+
+    def test_transition_valid(self):
+        assert devices_core.check_transition(0) == 0.0
+        assert devices_core.check_transition("2.5") == 2.5
+
+    def test_transition_negative_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.check_transition(-1)
+
+
+class TestLightPayload:
+    def test_state_uppercased(self):
+        assert devices_core.light_payload(state="on") == {"state": "ON"}
+        assert devices_core.light_payload(state="off") == {"state": "OFF"}
+        assert devices_core.light_payload(state="toggle") == {"state": "TOGGLE"}
+
+    def test_invalid_state_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.light_payload(state="DIM")
+
+    def test_brightness(self):
+        assert devices_core.light_payload(brightness=128) == {"brightness": 128}
+
+    def test_brightness_out_of_range_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.light_payload(brightness=255)
+        with pytest.raises(ValueError):
+            devices_core.light_payload(brightness=-1)
+
+    def test_color_dispatches_to_parser(self):
+        assert devices_core.light_payload(color="#00ff00") == {"color": {"r": 0, "g": 255, "b": 0}}
+
+    def test_color_temp_mireds(self):
+        assert devices_core.light_payload(color_temp=370) == {"color_temp": 370}
+
+    def test_color_temp_kelvin_converts(self):
+        assert devices_core.light_payload(color_temp=2700, kelvin=True) == {"color_temp": 370}
+
+    def test_color_temp_kelvin_out_of_lamp_range_raises(self):
+        # 1000K is 1000 mireds — outside the 150-500 lamp range, so it fails
+        # AFTER conversion: a Kelvin value that no lamp supports is rejected.
+        with pytest.raises(ValueError):
+            devices_core.light_payload(color_temp=1000, kelvin=True)
+
+    def test_transition_composes(self):
+        assert devices_core.light_payload(state="ON", transition=1.5) == {
+            "state": "ON",
+            "transition": 1.5,
+        }
+        assert devices_core.light_payload(brightness=10, transition=0) == {
+            "brightness": 10,
+            "transition": 0.0,
+        }
+
+    def test_empty_payload_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.light_payload()
+
+    def test_only_transition_raises(self):
+        # transition alone is not a command — needs a state/brightness/color
+        with pytest.raises(ValueError):
+            devices_core.light_payload(transition=2)
+
+
+class TestSetLight:
+    def test_publishes_to_set_topic(self):
+        c = _PublishOnlyClient()
+        result = devices_core.set_light(c, "Lounge Lamp", {"state": "ON"})
+        assert result["topic"] == "zigbee2mqtt/Lounge Lamp/set"
+        assert result["published"] == {"state": "ON"}
+        assert result["friendly_name"] == "Lounge Lamp"
+        assert result["rc"] == 0
+        assert c.published == [("zigbee2mqtt/Lounge Lamp/set", {"state": "ON"})]
+
+    def test_color_payload_reaches_wire_intact(self):
+        c = _PublishOnlyClient()
+        devices_core.set_light(c, "Lamp", devices_core.light_payload(color="#112233"))
+        assert c.published == [("zigbee2mqtt/Lamp/set", {"color": {"r": 17, "g": 34, "b": 51}})]
+
+    def test_empty_name_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.set_light(_PublishOnlyClient(), "", {"state": "ON"})
+
+    def test_empty_payload_raises(self):
+        with pytest.raises(ValueError):
+            devices_core.set_light(_PublishOnlyClient(), "Lamp", {})
