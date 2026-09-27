@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here.
 
+## [0.8.0] — 2026-09-27
+
+- `device ping`: the bridge liveness round trip. Publishes `{"id": ...}` to
+  `bridge/request/device/ping`; z2m performs a real Zigbee read on the
+  device's basic cluster and reports `data.successful`. This is the third —
+  and only *active* — liveness view: `device availability` reads a retained
+  flag the device last published, `device stale` reads raw `last_seen`, but
+  only `device ping` proves the radio link works **right now**.
+  - IDENT accepts a friendly name or IEEE address; unknown devices abort
+    before any publish (same as `device identify`).
+  - `--timeout S` (default 15) tunes how long the bridge gets to answer.
+  - A bridge timeout or z2m error surfaces as `successful: false` with an
+    `error` field — never a traceback — and `--json` output stays parseable,
+    so scripts can gate on it: the command **exits 1** when the device does
+    not answer.
+  - The flip side, stated in the help text: a sleeping battery device will
+    not answer a ping even when perfectly healthy — use
+    `device availability` there. `device ping` + `device availability` /
+    `availability-sweep` now cover both halves of "is it alive?".
+- Core function `ping` in `core/devices.py`.
+- Why it matters: after a `device availability-sweep --offline-only` or a
+  firmware upgrade, `device ping <name>` is the one-liner that separates
+  "flag says offline" from "the device really does not answer".
+- 15 new tests (6 unit + 9 E2E/workflow); total suite 991 passed, gate
+  green (coverage 99.3%, ruff check/format clean, bandit clean).
+
 ## [0.7.0] — 2026-09-18
 
 - Lighting convenience layer: `device on / off / toggle / brightness / color /

@@ -1080,6 +1080,31 @@ def search_devices(
     return out
 
 
+# ── ping (device liveness over the bridge request/response API) ──────────
+
+
+def ping(client: BridgeClient, id_: str, *, timeout: float = 15.0) -> dict:
+    """Check whether a device is alive, via z2m's ping request.
+
+    Publishes ``{"id": ...}`` to ``<base>/bridge/request/device/ping``; z2m
+    asks the device for a read on its basic cluster and reports whether it
+    answered. Response data is ``{"id", "successful"}`` under status ``"ok"``.
+
+    Unlike `read_availability` (a retained *flag* the device last published),
+    this is a real round trip — but a sleeping battery device will not answer
+    even though it is fine. Returns ``{"id", "successful", "status"}``.
+    """
+    if not id_:
+        raise ValueError("device id is required")
+    resp = client.request("device/ping", payload={"id": id_}, timeout=timeout)
+    data = resp.get("data") or {}
+    return {
+        "id": id_,
+        "successful": bool(data.get("successful", False)),
+        "status": resp.get("status"),
+    }
+
+
 # ── identify (Zigbee Identify effect via <name>/set) ─────────────────────
 
 

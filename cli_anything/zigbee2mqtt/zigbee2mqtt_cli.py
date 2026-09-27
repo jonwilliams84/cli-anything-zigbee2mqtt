@@ -590,6 +590,50 @@ def _light_emit(ctx: click.Context, ident: str, payload: dict) -> None:
         emit(ctx, devices_core.set_light(c, dev.get("friendly_name") or ident, payload))
 
 
+@device.command("ping")
+@click.argument("ident")
+@click.option(
+    "--timeout",
+    default=15.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for the bridge's ping response.",
+)
+@click.pass_context
+def device_ping(ctx, ident, timeout):
+    """Check whether a device is alive (bridge round trip, not a retained flag).
+
+    IDENT is a friendly name or IEEE address. z2m asks the device for a read
+    on its basic cluster and reports whether it answered. A sleeping battery
+    device will time out even when healthy — use `device availability` for
+    the last published flag instead. Exits 1 when the device does not answer.
+    """
+    with make_client(ctx) as c:
+        dev = devices_core.show(c, ident)
+        if not dev:
+            _abort(f"no device matching {ident!r}")
+            return
+        name = dev.get("friendly_name") or ident
+        ieee = dev.get("ieee_address")
+        try:
+            resp = devices_core.ping(c, name, timeout=timeout)
+            resp["friendly_name"] = name
+            resp["ieee_address"] = ieee
+            resp["rc"] = 0 if resp["successful"] else 1
+        except Exception as exc:
+            resp = {
+                "friendly_name": name,
+                "ieee_address": ieee,
+                "successful": False,
+                "status": "error",
+                "error": str(exc),
+                "rc": 1,
+            }
+        emit(ctx, resp)
+        if not resp["successful"]:
+            ctx.exit(1)
+
+
 @device.command("on")
 @click.argument("ident")
 @click.option("--transition", type=float, default=None, help="Seconds to fade in.")

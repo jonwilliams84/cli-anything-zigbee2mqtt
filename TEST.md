@@ -101,7 +101,31 @@ This is exactly the CI gate; it must exit 0 before merge.
   `TestDeviceIdentify`, including the
   `find --capability brightness` → `identify` workflow).
 
-## Latest run (refine pass 6 / v0.7.0, 2026-09-18)
+## Latest run (refine pass 7 / v0.8.0, 2026-09-27)
+
+- 991 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`)
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **`device ping`** — the bridge liveness round trip. A
+  `{"id": ...}` request to `bridge/request/device/ping`; z2m performs a real
+  Zigbee read on the device's basic cluster and reports `data.successful`.
+  Core function `ping` in `core/devices.py`. The CLI command resolves IEEE
+  addresses to friendly names first (unknown devices abort without
+  publishing), treats a bridge timeout / z2m error as `successful: false`
+  with an `error` field (never a traceback, JSON still parseable in
+  `--json` mode), and exits 1 when the device does not answer so it can gate
+  scripts. It is the active counterpart to `device availability` (retained
+  flag) and `device last-seen` (raw evidence) — the only one of the three
+  that proves the radio link works *now*; sleeping battery devices will not
+  answer even when healthy. 15 new tests: 6 unit
+  (`test_core.py`: `TestPing` — payload shape, success/failure parsing,
+  timeout pass-through, empty-id guard, exception propagation) and 9
+  E2E/workflow (`test_full_e2e.py`: `TestDevicePing` — text/JSON happy path,
+  IEEE resolution, unsuccessful exit code, error-as-result, unknown-device
+  abort, `--help`; `TestWorkflowAvailabilityThenPing` — availability flag →
+  ping round trip composition).
+
+## Previous run (refine pass 6 / v0.7.0, 2026-09-18)
 
 - 976 passed, 0 failed
 - Coverage: gate green (`--cov-fail-under=80`)
