@@ -101,6 +101,10 @@ cli-anything-zigbee2mqtt --json device exposes 'Lounge Lamp' --settable
 cli-anything-zigbee2mqtt device availability 'Lounge Lamp'
 cli-anything-zigbee2mqtt --json device availability-sweep --offline-only
 
+# Is it actually answering? (bridge round trip — z2m reads from the device)
+cli-anything-zigbee2mqtt device ping 'Lounge Lamp'
+cli-anything-zigbee2mqtt --json device ping 'Sleepy Button' --timeout 10
+
 # Which endpoints / clusters does it have? (local, no round trip)
 cli-anything-zigbee2mqtt device endpoints 'Lounge Lamp'
 cli-anything-zigbee2mqtt device clusters 'Lounge Lamp' --direction input
@@ -197,6 +201,18 @@ device inventory so devices that never published availability still show up.
 Rows come back offline-first. `last_seen` (see `device stale`) is the
 complementary signal: availability is z2m's verdict, `last_seen` is the raw
 evidence.
+
+`device ping` is the third, most active liveness view: it publishes a
+`bridge/request/device/ping` and z2m performs a real Zigbee round trip (a read
+on the device's basic cluster) and reports whether the device answered. It is
+the only one of the three that proves the radio link works *right now* —
+availability can be a stale retained flag, and a device that has never
+published since boot shows `null`. The flip side: a sleeping battery device
+will not answer a ping even when it is perfectly healthy, so `device ping`
+exits 1 with `successful: false`; prefer `device availability` there. A
+failed ping (bridge timeout or z2m error) is reported as
+`successful: false` with an `error` field rather than a traceback, and the
+command still emits JSON in `--json` mode.
 
 `device battery` is the battery-flavoured sibling sweep: one `<base>/#`
 subscription collects every retained device state and joins `battery`

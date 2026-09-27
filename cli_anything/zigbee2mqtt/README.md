@@ -58,6 +58,7 @@ cli-anything-zigbee2mqtt device endpoints 'Lounge Lamp'
 cli-anything-zigbee2mqtt device clusters 'Lounge Lamp' --direction input
 cli-anything-zigbee2mqtt --json device reportings 'Lounge Lamp'
 cli-anything-zigbee2mqtt --json device availability-sweep --offline-only
+cli-anything-zigbee2mqtt --json device ping 'Sleepy Button'   # bridge round trip
 
 # Cluster dictionary the running bridge accepts (retained bridge/definitions)
 cli-anything-zigbee2mqtt bridge definitions

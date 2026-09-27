@@ -3103,6 +3103,74 @@ class TestSearchDevices:
         assert [d["friendly_name"] for d in rows] == ["Lounge Lamp"]
 
 
+# ── devices.ping ────────────────────────────────────────────────────────────
+
+
+class _RequestRecordingClient:
+    """Fake client that records bridge requests and replays canned responses."""
+
+    base_topic = "zigbee2mqtt"
+
+    def __init__(self):
+        self.requests: list[tuple[str, object]] = []
+        self._responses: dict[str, dict] = {}
+
+    def set_response(self, path: str, response: dict) -> None:
+        self._responses[path] = response
+
+    def request(self, path: str, payload=None, *, timeout: float = 15.0) -> dict:
+        self.requests.append((path, payload))
+        resp = self._responses.get(path, {})
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
+
+
+class TestPing:
+    def test_publishes_ping_request_with_device_id(self):
+        c = _RequestRecordingClient()
+        c.set_response("device/ping", {"data": {"id": "Lamp", "successful": True}, "status": "ok"})
+        result = devices_core.ping(c, "Lamp")
+        assert c.requests == [("device/ping", {"id": "Lamp"})]
+        assert result["successful"] is True
+        assert result["status"] == "ok"
+
+    def test_unsuccessful_ping_is_false(self):
+        c = _RequestRecordingClient()
+        c.set_response("device/ping", {"data": {"id": "Lamp", "successful": False}, "status": "ok"})
+        result = devices_core.ping(c, "Lamp")
+        assert result["successful"] is False
+        assert result["id"] == "Lamp"
+
+    def test_missing_data_defaults_to_unsuccessful(self):
+        c = _RequestRecordingClient()
+        c.set_response("device/ping", {"status": "ok"})
+        assert devices_core.ping(c, "Lamp")["successful"] is False
+
+    def test_custom_timeout_is_passed_through(self):
+        c = _RequestRecordingClient()
+        timeouts: list[float] = []
+
+        def request(path, payload=None, *, timeout=15.0):
+            timeouts.append(timeout)
+            return {"data": {"successful": True}, "status": "ok"}
+
+        c.request = request  # type: ignore[method-assign]
+        devices_core.ping(c, "Lamp", timeout=7.5)
+        assert timeouts == [7.5]
+
+    def test_empty_id_raises(self):
+        c = _RequestRecordingClient()
+        with pytest.raises(ValueError):
+            devices_core.ping(c, "")
+
+    def test_request_exception_propagates(self):
+        c = _RequestRecordingClient()
+        c.set_response("device/ping", RuntimeError("timed out waiting for response"))
+        with pytest.raises(RuntimeError, match="timed out"):
+            devices_core.ping(c, "Lamp")
+
+
 # ── devices.identify ────────────────────────────────────────────────────────
 
 

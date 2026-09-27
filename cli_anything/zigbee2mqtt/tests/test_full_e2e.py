@@ -3515,3 +3515,156 @@ class TestLightingCommands:
         assert result.exit_code == 0, result.output
         for cmd in ("on", "off", "toggle", "brightness", "color", "color-temp"):
             assert cmd in result.output
+
+
+# ── device ping (v0.8.0 refine) ──────────────────────────────────────────────
+
+
+PING_DEVICES = [
+    {
+        "friendly_name": "Lounge Lamp",
+        "ieee_address": "0xaaa",
+        "type": "Router",
+        "power_source": "Mains (single phase)",
+    },
+    {
+        "friendly_name": "Hall Temperature",
+        "ieee_address": "0xbbb",
+        "type": "EndDevice",
+        "power_source": "Battery",
+    },
+]
+
+
+class TestDevicePing:
+    def _client(self, successful=True, error=None):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(PING_DEVICES))
+        if error is not None:
+            client.set_response("device/ping", error)
+        else:
+            client.set_response(
+                "device/ping", {"data": {"id": "x", "successful": True}, "status": "ok"}
+            )
+        return client
+
+    def test_ping_ok_text_output(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "ping", "Lounge Lamp"])
+            assert result.exit_code == 0, result.output
+            assert "Lounge Lamp" in result.output
+            assert "successful: True" in result.output
+
+    def test_ping_resolves_ieee_address(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "ping", "0xaaa"])
+            assert result.exit_code == 0, result.output
+            assert client._request_responses["device/ping"] == {
+                "data": {"id": "x", "successful": True},
+                "status": "ok",
+            }
+
+    def test_ping_json_output(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "ping", "Lounge Lamp"]
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["successful"] is True
+            assert data["friendly_name"] == "Lounge Lamp"
+            assert data["ieee_address"] == "0xaaa"
+            assert data["rc"] == 0
+
+    def test_ping_unsuccessful_exits_1(self, fake_client):
+        client = self._client(
+            successful=False,
+            error={"data": {"id": "x", "successful": False}, "status": "ok"},
+        )
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "ping", "Lounge Lamp"])
+            assert result.exit_code == 1
+            assert "successful: False" in result.output
+
+    def test_ping_unsuccessful_json_still_parseable(self, fake_client):
+        client = self._client(
+            successful=False,
+            error={"data": {"id": "x", "successful": False}, "status": "ok"},
+        )
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "ping", "Hall Temperature"]
+            )
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["successful"] is False
+            assert data["rc"] == 1
+
+    def test_ping_timeout_reported_as_error(self, fake_client):
+        client = self._client()
+
+        def request(path, payload=None, *, timeout=15.0):
+            raise RuntimeError("timed out waiting for response to device/ping")
+
+        client.request = request  # type: ignore[method-assign]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "ping", "Lounge Lamp"]
+            )
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["successful"] is False
+            assert "timed out" in data["error"]
+
+    def test_ping_unknown_device_aborts(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "device", "ping", "Ghost"])
+            assert result.exit_code == 1
+            assert "no device matching" in result.output
+
+    def test_ping_help_shows_timeout_option(self, fake_client):
+        result = _runner().invoke(cli, ["device", "ping", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--timeout" in result.output
+
+
+# ── workflow: availability-sweep → device ping (v0.8.0) ──────────────────────
+
+
+AVAIL_DEVICES = [
+    {
+        "friendly_name": "Sleepy Button",
+        "ieee_address": "0xccc",
+        "type": "EndDevice",
+        "power_source": "Battery",
+    },
+]
+
+
+class TestWorkflowAvailabilityThenPing:
+    def test_availability_then_ping(self, fake_client):
+        """Read the retained availability flag, then probe with device ping —
+        the two liveness views (retained flag vs. bridge round trip) compose."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(AVAIL_DEVICES))
+        client.set_retained(
+            "zigbee2mqtt/Sleepy Button/availability", json.dumps({"state": "offline"})
+        )
+        client.set_response(
+            "device/ping", {"data": {"id": "x", "successful": False}, "status": "ok"}
+        )
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            r = _runner()
+            avail = r.invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "availability", "Sleepy Button"]
+            )
+            assert avail.exit_code == 0, avail.output
+            data = json.loads(avail.output)
+            assert data["availability"] == "offline"
+            probe = r.invoke(cli, ["--json", "--mqtt-host", "x", "device", "ping", "Sleepy Button"])
+            assert probe.exit_code == 1
+            assert json.loads(probe.output)["successful"] is False
