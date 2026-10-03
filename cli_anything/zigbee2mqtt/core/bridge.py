@@ -78,7 +78,7 @@ def watch_logging(
                 data["_callback_error"] = str(exc)
 
     client.subscribe(f"{client.base_topic}/bridge/logging", _cb)
-    end = time.time() + duration if duration else None
+    end = (time.time() + duration) if duration is not None else None
     try:
         while end is None or time.time() < end:
             time.sleep(0.25)
@@ -111,7 +111,7 @@ def watch_events(
                 data["_callback_error"] = str(exc)
 
     client.subscribe(f"{client.base_topic}/bridge/event", _cb)
-    end = time.time() + duration if duration else None
+    end = (time.time() + duration) if duration is not None else None
     try:
         while end is None or time.time() < end:
             time.sleep(0.25)

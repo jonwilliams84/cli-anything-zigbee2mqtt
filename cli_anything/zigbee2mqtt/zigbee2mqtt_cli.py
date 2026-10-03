@@ -23,6 +23,7 @@ from cli_anything.zigbee2mqtt.core import (
     project,
     scenes as scenes_core,
 )
+from cli_anything.zigbee2mqtt.core import mqtt_raw as mqtt_raw
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient, MqttError
 
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
@@ -2007,6 +2008,100 @@ def extension_remove(ctx, name):
         emit(ctx, extensions_core.remove(c, name))
 
 
+# ──────────────────────────────────────────────────────── raw mqtt
+
+
+@cli.group()
+def mqtt():
+    """Raw MQTT passthrough — publish / read / watch / list on the message plane.
+
+    Reach any z2m topic the typed command groups do not model: device or
+    group ``set``/``get`` with arbitrary payloads, retained state dumps
+    (``bridge/info``, ``bridge/devices``, ``bridge/groups``), or a newer
+    bridge API before this CLI wraps it. TOPIC is resolved against the base
+    topic; one that already starts with the base topic is used verbatim, and
+    a payload that parses as JSON is sent as JSON.
+    """
+
+
+@mqtt.command("publish")
+@click.argument("topic")
+@click.argument("payload", required=False)
+@click.option(
+    "--retain", is_flag=True, default=False, help="Publish with the MQTT retain flag set."
+)
+@click.option("--qos", default=0, type=int, help="MQTT QoS level 0-2 (default 0).")
+@click.pass_context
+def mqtt_publish(ctx, topic, payload, retain, qos):
+    """Publish a raw payload to <base>/TOPIC.
+
+    e.g. `mqtt publish 'lamp/set' '{"state":"ON"}'` — a payload that parses
+    as JSON is sent as JSON, anything else goes out verbatim.
+    """
+    try:
+        mqtt_raw.check_qos(qos)
+        mqtt_raw.normalize_topic(topic, ctx.obj.get("base_topic") or "zigbee2mqtt")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    with make_client(ctx) as c:
+        emit(ctx, mqtt_raw.publish_raw(c, topic, payload, retain=retain, qos=qos))
+
+
+@mqtt.command("read")
+@click.argument("topic")
+@click.option(
+    "--timeout",
+    default=5.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for a retained message.",
+)
+@click.pass_context
+def mqtt_read(ctx, topic, timeout):
+    """One-shot read of TOPIC's retained message (e.g. 'bridge/info', 'lamp')."""
+    with make_client(ctx) as c:
+        emit(ctx, mqtt_raw.read_raw(c, topic, timeout=timeout))
+
+
+@mqtt.command("watch")
+@click.argument("topic_filter")
+@click.option("--duration", default=15.0, type=float, help="Seconds to listen (default 15)")
+@click.pass_context
+def mqtt_watch(ctx, topic_filter, duration):
+    """Collect every message matching TOPIC_FILTER (MQTT wildcards OK) for --duration seconds.
+
+    e.g. `mqtt watch 'bridge/logging' --duration 30` or `mqtt watch 'sensor1/#'`.
+    """
+    try:
+        mqtt_raw.normalize_topic(topic_filter, ctx.obj.get("base_topic") or "zigbee2mqtt")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    with make_client(ctx) as c:
+        emit(ctx, mqtt_raw.watch_topic(c, topic_filter, duration=duration))
+
+
+@mqtt.command("topics")
+@click.option("--prefix", default=None, help="Only topics under <base>/<prefix> (e.g. 'sensor1').")
+@click.option(
+    "--duration",
+    default=2.0,
+    type=float,
+    help="Window for retained dumps to arrive (default 2 seconds).",
+)
+@click.pass_context
+def mqtt_topics(ctx, prefix, duration):
+    """List the topics under <base>/# that published during the window.
+
+    Retained dumps arrive immediately on subscribe, so a short window is
+    enough to enumerate device state topics and the bridge surface without
+    knowing names up front.
+    """
+    with make_client(ctx) as c:
+        emit(ctx, mqtt_raw.list_topics(c, duration=duration, prefix=prefix))
+
+
 # ──────────────────────────────────────────────────────── REPL
 
 
@@ -2019,7 +2114,9 @@ def repl(ctx):
     except ImportError:
         click.echo("REPL requires prompt-toolkit. pip install prompt-toolkit", err=True)
         return
-    skin = ReplSkin("zigbee2mqtt", version="0.1.0")
+    from cli_anything.zigbee2mqtt import __version__
+
+    skin = ReplSkin("zigbee2mqtt", version=__version__)
     skin.print_banner()
     pt_session = skin.create_prompt_session()
     while True:

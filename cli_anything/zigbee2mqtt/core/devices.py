@@ -155,7 +155,7 @@ def watch_device(
             collected.append({"raw": p})
 
     client.subscribe(topic, _cb)
-    end = time.time() + duration if duration else None
+    end = (time.time() + duration) if duration is not None else None
     try:
         while end is None or time.time() < end:
             time.sleep(0.1)

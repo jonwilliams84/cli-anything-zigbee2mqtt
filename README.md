@@ -47,6 +47,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | `converter` | `list / show / add / remove` — manages `data/external_converters/*.js` via kubectl |
 | `extension` | `list / show / save / remove` — z2m extensions (deeper than converters); managed entirely over MQTT |
 | `config` | `show / save` (local connection profile) |
+| `mqtt` | `publish / read / watch / topics` — raw MQTT passthrough to the z2m message plane (v0.9.0) |
 | `repl` | Interactive shell (default with no subcommand) |
 
 All commands support `--json` for machine-readable output.
@@ -270,6 +271,38 @@ cli-anything-zigbee2mqtt device read plug1 --cluster genOnOff --attribute onOff 
 cli-anything-zigbee2mqtt device state plug1                        # the answer lands here
 ```
 
+## Raw MQTT passthrough (`mqtt` group, v0.9.0)
+
+z2m's control surface *is* MQTT — bridge request/response topics, per-device
+`<name>/set` and `<name>/get` writes, and retained state dumps. The typed
+command groups above wrap the common paths; the `mqtt` group reaches
+everything else — documented or not, current or future bridge API — without
+leaving the CLI:
+
+| Command | What it does |
+|---|---|
+| `mqtt publish <topic> [payload]` | Publish to `<base>/<topic>` (e.g. `mqtt publish 'lamp/set' '{"state":"ON"}'`). A payload that parses as JSON is sent as JSON; anything else goes out verbatim; an omitted payload publishes an empty message. `--retain` and `--qos 0-2` set the MQTT flags. |
+| `mqtt read <topic> [--timeout S]` | One-shot read of a topic's retained message (e.g. `bridge/info`, `bridge/devices`, `bridge/groups`, a device's state topic). No retained message → `payload: null`, not an error. |
+| `mqtt watch <filter> [--duration S]` | Collect every message matching an MQTT wildcard filter (e.g. `sensor1/#`, `bridge/logging`) for `--duration` seconds (default 15; Ctrl-C stops early). |
+| `mqtt topics [--prefix P] [--duration S]` | Enumerate the topics under `<base>/#` that published during the window — retained dumps arrive on subscribe, so a short window (default 2s) enumerates the whole topic tree. Rows carry payload size and a truncated preview. |
+
+Topics are resolved against the base topic: `lamp/set` means
+`<base>/lamp/set`, and a topic that already starts with the base topic is
+used verbatim. There is deliberately **no** bridge/response correlation here —
+this is the raw plane; publish-and-verify with `mqtt read` / `mqtt watch`:
+
+```bash
+# Publish a groupcast to a group by name (same wire as `group set`)
+cli-anything-zigbee2mqtt mqtt publish 'kitchen-lights/set' '{"state":"ON","brightness":128}'
+
+# Read a device's retained state as JSON
+cli-anything-zigbee2mqtt --json mqtt read 'lamp' | jq '.payload'
+
+# Enumerate the bridge's topic tree, then dig into one topic
+cli-anything-zigbee2mqtt --json mqtt topics | jq '.[].topic'
+cli-anything-zigbee2mqtt --json mqtt read 'living-room-sensor'
+```
+
 ## Architecture
 
 ```
@@ -294,6 +327,7 @@ cli_anything/zigbee2mqtt/
 │   ├── converters.py       # external_converters/ file mgmt (kubectl)
 │   ├── extensions.py       # extension save/remove/list/show (MQTT)
 │   ├── install_code.py     # install_code/add / remove
+│   ├── mqtt_raw.py         # raw MQTT passthrough (mqtt publish/read/watch/topics)
 │   ├── k8s_backend.py      # kubectl helpers
 │   └── project.py          # local connection profile
 └── utils/

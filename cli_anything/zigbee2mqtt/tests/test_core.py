@@ -11,6 +11,7 @@ import threading
 import pytest
 
 from cli_anything.zigbee2mqtt.core import devices as devices_core
+from cli_anything.zigbee2mqtt.core import mqtt_raw
 from cli_anything.zigbee2mqtt.core import project
 
 
@@ -3385,3 +3386,264 @@ class TestSetLight:
     def test_empty_payload_raises(self):
         with pytest.raises(ValueError):
             devices_core.set_light(_PublishOnlyClient(), "Lamp", {})
+
+
+# ── raw mqtt passthrough (v0.9.0) ───────────────────────────────────────────────
+
+
+class _RawMqttClient:
+    """Fake capturing publishes and offering a scriptable retained store."""
+
+    base_topic = "zigbee2mqtt"
+
+    def __init__(self):
+        self.published: list[tuple] = []
+        self._retained: dict[str, str] = {}
+        self.subscriptions: list[tuple[str, object]] = []
+        self._queued: list[tuple[str, str]] = []  # delivered on subscribe
+
+    def set_retained(self, topic: str, payload: str) -> None:
+        self._retained[topic] = payload
+
+    def queue_message(self, topic: str, payload: str) -> None:
+        self._queued.append((topic, payload))
+
+    def publish(self, topic: str, payload, *, qos: int = 0, retain: bool = False) -> int:
+        self.published.append((topic, payload, {"qos": qos, "retain": retain}))
+        return 0
+
+    def collect_retained(self, topic: str, *, timeout: float = 5.0) -> str | None:
+        return self._retained.get(topic)
+
+    def subscribe(self, filter_: str, callback) -> None:
+        self.subscriptions.append((filter_, callback))
+        for topic, payload in self._queued:
+            callback(topic, payload)
+
+
+class TestNormalizeTopic:
+    def test_relative_topic_gets_base_prefix(self):
+        assert mqtt_raw.normalize_topic("lamp/set", "zigbee2mqtt") == "zigbee2mqtt/lamp/set"
+
+    def test_base_prefixed_topic_used_verbatim(self):
+        assert (
+            mqtt_raw.normalize_topic("zigbee2mqtt/bridge/info", "zigbee2mqtt")
+            == "zigbee2mqtt/bridge/info"
+        )
+
+    def test_nested_base_topic(self):
+        assert mqtt_raw.normalize_topic("bridge/info", "hass/z2m") == "hass/z2m/bridge/info"
+
+    def test_trailing_slash_in_base_is_trimmed(self):
+        assert mqtt_raw.normalize_topic("bridge/info", "zigbee2mqtt/") == "zigbee2mqtt/bridge/info"
+
+    def test_empty_topic_raises(self):
+        with pytest.raises(ValueError):
+            mqtt_raw.normalize_topic("", "zigbee2mqtt")
+
+    def test_blank_topic_raises(self):
+        with pytest.raises(ValueError):
+            mqtt_raw.normalize_topic("   ", "zigbee2mqtt")
+
+    def test_none_topic_raises(self):
+        with pytest.raises(ValueError):
+            mqtt_raw.normalize_topic(None, "zigbee2mqtt")
+
+
+class TestCoercePayload:
+    def test_json_object(self):
+        assert mqtt_raw.coerce_payload('{"state":"ON"}') == {"state": "ON"}
+
+    def test_json_list_and_number(self):
+        assert mqtt_raw.coerce_payload("[1,2]") == [1, 2]
+        assert mqtt_raw.coerce_payload("42") == 42
+
+    def test_plain_string_stays_string(self):
+        assert mqtt_raw.coerce_payload("hello world") == "hello world"
+
+    def test_none_stays_none(self):
+        assert mqtt_raw.coerce_payload(None) is None
+
+
+class TestCheckQos:
+    @pytest.mark.parametrize("qos", [0, 1, 2])
+    def test_valid(self, qos):
+        assert mqtt_raw.check_qos(qos) == qos
+
+    @pytest.mark.parametrize("qos", [-1, 3, "1"])
+    def test_invalid(self, qos):
+        with pytest.raises(ValueError):
+            mqtt_raw.check_qos(qos)
+
+
+class TestPublishRaw:
+    def test_json_payload_sent_as_json(self):
+        c = _RawMqttClient()
+        result = mqtt_raw.publish_raw(c, "lamp/set", '{"state":"ON"}')
+        assert c.published == [
+            ("zigbee2mqtt/lamp/set", {"state": "ON"}, {"qos": 0, "retain": False})
+        ]
+        assert result["payload"] == {"state": "ON"}
+        assert result["published"] is True
+        assert result["rc"] == 0
+
+    def test_plain_text_sent_verbatim(self):
+        c = _RawMqttClient()
+        result = mqtt_raw.publish_raw(c, "lamp/set", "just text")
+        assert c.published == [("zigbee2mqtt/lamp/set", "just text", {"qos": 0, "retain": False})]
+        assert result["payload"] == "just text"
+
+    def test_dict_payload_used_directly(self):
+        c = _RawMqttClient()
+        mqtt_raw.publish_raw(c, "lamp/set", {"state": "OFF"})
+        assert c.published == [
+            ("zigbee2mqtt/lamp/set", {"state": "OFF"}, {"qos": 0, "retain": False})
+        ]
+
+    def test_none_payload_publishes_empty_message(self):
+        c = _RawMqttClient()
+        result = mqtt_raw.publish_raw(c, "lamp/set")
+        assert result["payload"] is None
+        assert c.published == [("zigbee2mqtt/lamp/set", None, {"qos": 0, "retain": False})]
+
+    def test_retain_and_qos_reach_the_wire(self):
+        c = _RawMqttClient()
+        result = mqtt_raw.publish_raw(c, "lamp/set", '{"state":"ON"}', retain=True, qos=1)
+        assert c.published == [
+            ("zigbee2mqtt/lamp/set", {"state": "ON"}, {"qos": 1, "retain": True})
+        ]
+        assert result["retain"] is True
+        assert result["qos"] == 1
+
+    def test_bad_qos_aborts_before_publish(self):
+        c = _RawMqttClient()
+        with pytest.raises(ValueError):
+            mqtt_raw.publish_raw(c, "lamp/set", "x", qos=5)
+        assert c.published == []
+
+    def test_empty_topic_aborts_before_publish(self):
+        c = _RawMqttClient()
+        with pytest.raises(ValueError):
+            mqtt_raw.publish_raw(c, "", "x")
+        assert c.published == []
+
+    def test_publish_rc_nonzero_means_not_published(self):
+        c = _RawMqttClient()
+        c.publish = lambda topic, payload, *, qos=0, retain=False: 5  # type: ignore[method-assign]
+        result = mqtt_raw.publish_raw(c, "lamp/set", "x")
+        assert result["published"] is False
+        assert result["rc"] == 5
+
+
+class TestReadRaw:
+    def test_retained_json_is_parsed(self):
+        c = _RawMqttClient()
+        c.set_retained("zigbee2mqtt/bridge/info", '{"version":"1.35.0"}')
+        result = mqtt_raw.read_raw(c, "bridge/info")
+        assert result == {"topic": "zigbee2mqtt/bridge/info", "payload": {"version": "1.35.0"}}
+
+    def test_retained_plain_string(self):
+        c = _RawMqttClient()
+        c.set_retained("zigbee2mqtt/bridge/state", "online")
+        result = mqtt_raw.read_raw(c, "bridge/state")
+        assert result["payload"] == "online"
+
+    def test_no_retained_message_reports_null_payload(self):
+        c = _RawMqttClient()
+        result = mqtt_raw.read_raw(c, "ghost")
+        assert result["payload"] is None
+
+    def test_timeout_pass_through(self):
+        c = _RawMqttClient()
+        calls: list[float] = []
+        original = c.collect_retained
+
+        def spy(topic, *, timeout=5.0):
+            calls.append(timeout)
+            return original(topic, timeout=timeout)
+
+        c.collect_retained = spy  # type: ignore[method-assign]
+        mqtt_raw.read_raw(c, "bridge/info", timeout=9.5)
+        assert calls == [9.5]
+
+    def test_empty_topic_raises(self):
+        with pytest.raises(ValueError):
+            mqtt_raw.read_raw(_RawMqttClient(), "")
+
+
+class TestWatchTopic:
+    def test_collects_delivered_messages(self):
+        c = _RawMqttClient()
+        c.queue_message("zigbee2mqtt/sensor1", '{"temperature":21.5}')
+        result = mqtt_raw.watch_topic(c, "sensor1/#", duration=0.05)
+        assert result == [{"topic": "zigbee2mqtt/sensor1", "payload": {"temperature": 21.5}}]
+
+    def test_non_json_payload_kept_as_string(self):
+        c = _RawMqttClient()
+        c.queue_message("zigbee2mqtt/bridge/state", "online")
+        result = mqtt_raw.watch_topic(c, "bridge/#", duration=0.05)
+        assert result[0]["payload"] == "online"
+
+    def test_subscribe_filter_is_base_resolved(self):
+        c = _RawMqttClient()
+        mqtt_raw.watch_topic(c, "lamp/#", duration=0.05)
+        assert c.subscriptions[0][0] == "zigbee2mqtt/lamp/#"
+
+    def test_callback_receives_and_survives_errors(self):
+        c = _RawMqttClient()
+        c.queue_message("zigbee2mqtt/sensor1", "{}")
+        seen: list[dict] = []
+
+        def boom(_data):
+            seen.append(_data)
+            raise RuntimeError("consumer bug")
+
+        result = mqtt_raw.watch_topic(c, "sensor1/#", duration=0.05, callback=boom)
+        assert len(seen) == 1
+        assert result[0]["_callback_error"] == "consumer bug"
+
+    def test_empty_filter_raises(self):
+        with pytest.raises(ValueError):
+            mqtt_raw.watch_topic(_RawMqttClient(), "", duration=0.05)
+
+    def test_none_duration_tails_until_keyboard_interrupt(self, monkeypatch):
+        c = _RawMqttClient()
+        c.subscribe = lambda f, cb: None  # type: ignore[method-assign]
+
+        def interrupt(_seconds):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(mqtt_raw.time, "sleep", interrupt)
+        result = mqtt_raw.watch_topic(c, "#", duration=None)
+        assert result == []
+
+
+class TestListTopics:
+    def test_lists_retained_topics_sorted_with_preview(self):
+        c = _RawMqttClient()
+        c.queue_message("zigbee2mqtt/bridge/state", "online")
+        c.queue_message("zigbee2mqtt/lamp", '{"state":"ON"}')
+        result = mqtt_raw.list_topics(c, duration=0.05)
+        assert [r["topic"] for r in result] == ["zigbee2mqtt/bridge/state", "zigbee2mqtt/lamp"]
+        assert result[0] == {"topic": "zigbee2mqtt/bridge/state", "bytes": 6, "preview": "online"}
+
+    def test_preview_is_truncated(self):
+        c = _RawMqttClient()
+        c.queue_message("zigbee2mqtt/big", "x" * 500)
+        result = mqtt_raw.list_topics(c, duration=0.05, preview_chars=10)
+        assert result[0]["preview"] == "x" * 10
+        assert result[0]["bytes"] == 500
+
+    def test_prefix_narrows_the_subscription(self):
+        c = _RawMqttClient()
+        mqtt_raw.list_topics(c, duration=0.05, prefix="lamp")
+        assert c.subscriptions[0][0] == "zigbee2mqtt/lamp/#"
+
+    def test_duplicate_messages_last_write_wins(self):
+        c = _RawMqttClient()
+        c.queue_message("zigbee2mqtt/lamp", '{"state":"ON"}')
+        c.queue_message("zigbee2mqtt/lamp", '{"state":"OFF"}')
+        result = mqtt_raw.list_topics(c, duration=0.05)
+        assert len(result) == 1
+        assert result[0]["bytes"] == 15
+        assert result[0]["preview"] == '{"state":"OFF"}'
