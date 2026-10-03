@@ -2,6 +2,57 @@
 
 All notable changes to this project are documented here.
 
+## [0.9.0] — 2026-10-03
+
+- **Raw MQTT passthrough**: new `mqtt` command group — `mqtt publish`,
+  `mqtt read`, `mqtt watch`, `mqtt topics`. z2m's control surface *is* MQTT:
+  bridge request/response topics, per-device `<name>/set` and `<name>/get`
+  writes, and retained state dumps. Every command until now went through a
+  typed wrapper; these four reach anything the wrappers don't model — a
+  payload key no convenience command covers, a retained dump
+  (`bridge/info`, `bridge/devices`, a device's state topic), an MQTT
+  wildcard tail, or a future/tweaked bridge API the moment z2m ships it —
+  without leaving the CLI.
+  - `mqtt publish <topic> [payload]` — topic resolves against the base
+    topic (`lamp/set` → `zigbee2mqtt/lamp/set`; a topic that already starts
+    with the base topic is used verbatim). A payload string that parses as
+    JSON is sent as JSON (so the wire is indistinguishable from
+    `device set`); any other text is published verbatim; an omitted payload
+    publishes an empty message. `--retain` and `--qos 0-2` set the MQTT
+    flags; bad values abort before any broker connection. Output
+    `{"topic", "payload", "published", "rc", "retain", "qos"}` — gate
+    scripts on `published`/`rc` like `device identify`.
+  - `mqtt read <topic> [--timeout S]` — one-shot retained read, JSON-decoded
+    when possible. `payload: null` means "nothing ever published on this
+    topic" — a valid answer, not an error, and the fastest way to read any
+    retained z2m dump.
+  - `mqtt watch <filter> [--duration S]` — collect every message matching an
+    MQTT wildcard filter (e.g. `sensor1/#`, `bridge/logging`) for
+    `--duration` seconds (default 15, Ctrl-C stops early); consumer-callback
+    errors are logged, never fatal (same contract as `bridge watch-events`).
+  - `mqtt topics [--prefix P] [--duration S]` — enumerate the topics under
+    `<base>/#`: subscribing pulls every retained dump in immediately, so a
+    short default window (2s) snapshots the whole topic tree with payload
+    size and a truncated preview per row — topic discovery without knowing
+    names up front.
+- Core functions `normalize_topic`, `coerce_payload`, `check_qos`,
+  `publish_raw`, `read_raw`, `watch_topic`, `list_topics` in the new
+  `core/mqtt_raw.py`; the topic-resolution and payload-coercion helpers are
+  client-free, like the rest of the introspection helpers.
+- Bug fix riding along: every watch loop (`mqtt watch`, `bridge
+  watch-events` / `watch-logging`, `device watch`) treated `--duration 0` as
+  "tail forever" — `time.time() + duration if duration else None` is falsy
+  on 0 — so a zero-width window hung the CLI. All four now use
+  `duration is not None`; `--duration 0` is a non-blocking drain.
+- Why it matters: the typed groups are coverage, not a cage. When z2m adds or
+  changes a bridge API, `mqtt publish` / `mqtt read` works against it the
+  same minute; and one-off payloads that no convenience command models are a
+  one-liner instead of a second MQTT tool. Recommended loop: `mqtt topics`
+  to discover, `mqtt read` to inspect, `mqtt publish` to act, `mqtt watch`
+  to confirm.
+- 64 new tests (40 unit + 24 E2E/workflow); total suite 1055 passed, gate
+  green (coverage 99.15%, ruff check/format clean, bandit clean).
+
 ## [0.8.0] — 2026-09-27
 
 - `device ping`: the bridge liveness round trip. Publishes `{"id": ...}` to

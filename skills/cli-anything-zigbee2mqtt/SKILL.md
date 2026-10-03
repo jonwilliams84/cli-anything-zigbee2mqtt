@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), network-wide battery audits, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), network-wide battery audits, retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates, permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management, plus a raw MQTT passthrough layer (mqtt publish / read / watch / topics) for reaching any topic the typed groups do not model. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -32,6 +32,9 @@ agent can reliably tell whether an operation succeeded.
 - Pushing or removing an external converter file (e.g. to override an exposes
   block in `zigbee-herdsman-converters` without forking it).
 - Restarting the z2m process — polite via MQTT, or hard via kubectl rollout.
+- Reaching a z2m topic the typed commands do not model — a device `<name>/set`
+  payload with arbitrary keys, a retained dump, or a newer bridge API — via the
+  raw MQTT passthrough (`mqtt publish` / `read` / `watch` / `topics`).
 
 ## Install
 
@@ -59,6 +62,7 @@ Two external deps:
 | `converter` | `converter list`, `converter show <name.js>`, `converter add <name.js> ./local.js`, `converter remove <name.js>` |
 | `extension` | `extension list`, `extension show <name.js>`, `extension save <name.js> ./local.js`, `extension remove <name.js>` — z2m extensions (deeper than converters) via MQTT |
 | `config` | `config show`, `config save` |
+| `mqtt` | `mqtt publish <topic> [payload] [--retain --qos N]` (JSON payloads sent as JSON, topic resolved against the base topic), `mqtt read <topic> [--timeout S]` (one-shot retained read, `payload: null` when absent), `mqtt watch <filter> [--duration S]` (MQTT wildcard tail, Ctrl-C stops early), `mqtt topics [--prefix P] [--duration S]` (enumerate topics under `<base>/#` from retained dumps) — raw MQTT passthrough for anything the typed groups do not model |
 | `repl` | Interactive shell (default with no subcommand) |
 
 All commands support `--json` for machine-readable output.
@@ -156,6 +160,17 @@ leaves a timestamped `.bak` next to the existing file (if any) for rollback.
 **Restart timing**: a polite `bridge restart` takes ~10-30s while z2m flushes
 state and reconnects to the coordinator. The hard variant via `--via-kubectl`
 adds the rollout time (~20-60s for the pod to be replaced).
+
+**The `mqtt` group is the raw plane — no bridge response correlation.** Topics
+resolve against the base topic (`lamp/set` → `<base>/lamp/set`; a topic that
+already starts with it is used verbatim) and a JSON-parseable payload is sent as
+JSON. `mqtt read <topic>` never blocks longer than `--timeout` and reports
+`payload: null` for topics that never published — it is the fastest way to read
+any retained dump (`bridge/info`, `bridge/devices`, a device state topic).
+`mqtt topics` enumerates the topic tree from the retained dumps a subscribe
+pulls in, so use it before `read` when you do not know the names. `mqtt watch`
+tails a wildcard filter; pass `--duration 0` to drain what is already queued
+without waiting.
 
 ## Typical workflows
 
@@ -352,4 +367,23 @@ cli-anything-zigbee2mqtt device off 'Lounge Lamp' --transition 2
 
 # Confirm the device took the command.
 cli-anything-zigbee2mqtt device state 'Lounge Lamp'
+```
+
+### Reach an unwrapped topic (raw MQTT passthrough)
+
+```bash
+# Enumerate the topic tree from retained dumps (local subscribe, no round trips)
+cli-anything-zigbee2mqtt --json mqtt topics | jq '.[].topic'
+
+# Dig into one retained payload
+cli-anything-zigbee2mqtt --json mqtt read 'bridge/info' | jq '.payload.version'
+
+# Publish an arbitrary set payload to a device or group
+cli-anything-zigbee2mqtt mqtt publish 'kitchen-lights/set' '{"state":"ON","brightness":128}'
+
+# Confirm: watch the topic live (or mqtt read for the retained view)
+cli-anything-zigbee2mqtt --json mqtt watch 'kitchen-lights' --duration 5
+
+# Drain queued messages without waiting (duration 0 is a valid window)
+cli-anything-zigbee2mqtt --json mqtt watch 'bridge/logging' --duration 0
 ```

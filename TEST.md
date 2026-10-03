@@ -101,7 +101,37 @@ This is exactly the CI gate; it must exit 0 before merge.
   `TestDeviceIdentify`, including the
   `find --capability brightness` → `identify` workflow).
 
-## Latest run (refine pass 7 / v0.8.0, 2026-09-27)
+## Latest run (refine pass 8 / v0.9.0, 2026-10-03)
+
+- 1055 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`), total 99.15%
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **raw MQTT passthrough** — `mqtt publish` / `mqtt read` /
+  `mqtt watch` / `mqtt topics`. z2m's control surface *is* MQTT (bridge
+  request/response, `<name>/set`/`<name>/get`, retained state dumps); the
+  typed groups wrap the common paths, and these four reach everything else
+  — any payload key, any retained dump (`bridge/info`, `bridge/devices`,
+  a device's state topic), an MQTT wildcard tail, or a topic-tree enumerate
+  (`mqtt topics` reads the retained dumps a subscribe pulls in) — without
+  leaving the CLI. Topics resolve against the base topic
+  (`normalize_topic`), JSON-parseable payloads are published as JSON and
+  read output is JSON-decoded when possible (`coerce_payload`); an omitted
+  `mqtt publish` payload publishes an empty message; `payload: null` from
+  `mqtt read` means "nothing ever published on this topic", not an error.
+  Core functions `normalize_topic` / `coerce_payload` / `check_qos` /
+  `publish_raw` / `read_raw` / `watch_topic` / `list_topics` in
+  `core/mqtt_raw.py`. Bug fix riding along: every watch loop
+  (`mqtt watch`, `bridge watch-events` / `watch-logging`, `device watch`)
+  now treats `--duration 0` as a valid non-blocking drain window — the old
+  `time.time() + duration if duration else None` form hung on 0
+  (falsy → infinite tail). 64 new tests: 40 unit
+  (`test_core.py`: `TestNormalizeTopic`, `TestCoercePayload`, `TestCheckQos`,
+  `TestPublishRaw`, `TestReadRaw`, `TestWatchTopic`, `TestListTopics`) and
+  24 E2E/workflow (`test_full_e2e.py`: `TestMqttPublish`, `TestMqttRead`,
+  `TestMqttWatch`, `TestMqttTopics`, `TestMqttGroupRegistered`,
+  `TestWorkflowInventoryThenRawPublish`, `TestWorkflowReadThenPublishRetained`).
+
+## Previous run (refine pass 7 / v0.8.0, 2026-09-27)
 
 - 991 passed, 0 failed
 - Coverage: gate green (`--cov-fail-under=80`)

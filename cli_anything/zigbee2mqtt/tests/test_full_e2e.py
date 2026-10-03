@@ -3668,3 +3668,310 @@ class TestWorkflowAvailabilityThenPing:
             probe = r.invoke(cli, ["--json", "--mqtt-host", "x", "device", "ping", "Sleepy Button"])
             assert probe.exit_code == 1
             assert json.loads(probe.output)["successful"] is False
+
+
+# ── raw MQTT passthrough (v0.9.0 refine) ─────────────────────────────────────
+
+
+class TestMqttPublish:
+    def test_json_payload_reaches_wire_as_json(self, fake_client):
+        client = FakeBridgeClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "mqtt", "publish", "lamp/set", '{"state":"ON"}']
+            )
+            assert result.exit_code == 0, result.output
+            assert client.published == [("zigbee2mqtt/lamp/set", {"state": "ON"})]
+
+    def test_plain_text_payload_sent_verbatim(self, fake_client):
+        client = FakeBridgeClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "mqtt", "publish", "lamp/set", "hi"]
+            )
+            assert result.exit_code == 0, result.output
+            assert client.published == [("zigbee2mqtt/lamp/set", "hi")]
+
+    def test_omitted_payload_publishes_empty_message(self, fake_client):
+        client = FakeBridgeClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "mqtt", "publish", "lamp/set"])
+            assert result.exit_code == 0, result.output
+            assert client.published == [("zigbee2mqtt/lamp/set", None)]
+
+    def test_retain_and_qos_flags_forwarded(self, fake_client):
+        client = FakeBridgeClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "mqtt",
+                    "publish",
+                    "lamp/set",
+                    "{'x':1}",
+                    "--qos",
+                    "1",
+                    "--retain",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            # the payload does not parse as JSON -> verbatim string
+            assert client.published == [("zigbee2mqtt/lamp/set", "{'x':1}")]
+
+    def test_text_output_shape(self, fake_client):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient()
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "mqtt", "publish", "lamp/set", '{"state":"ON"}']
+            )
+            assert result.exit_code == 0, result.output
+            assert "topic: zigbee2mqtt/lamp/set" in result.output
+            assert "published: True" in result.output
+
+    def test_json_output_shape(self, fake_client):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient()
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--json",
+                    "--mqtt-host",
+                    "x",
+                    "mqtt",
+                    "publish",
+                    "lamp/set",
+                    '{"state":"ON"}',
+                    "--retain",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["topic"] == "zigbee2mqtt/lamp/set"
+            assert data["payload"] == {"state": "ON"}
+            assert data["published"] is True
+            assert data["retain"] is True
+
+    def test_invalid_qos_aborts_before_publishing(self, fake_client):
+        client = FakeBridgeClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "mqtt", "publish", "lamp/set", "x", "--qos", "9"]
+            )
+            assert result.exit_code == 1
+            assert "qos must be 0, 1 or 2" in result.output
+            assert client.published == []
+
+    def test_help(self, fake_client):
+        result = _runner().invoke(cli, ["mqtt", "publish", "--help"])
+        assert result.exit_code == 0
+
+
+class TestMqttRead:
+    def test_retained_json_is_parsed_and_emitted(self, fake_client):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/info", '{"version":"1.35.0"}')
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "mqtt", "read", "bridge/info"])
+            assert result.exit_code == 0, result.output
+            assert "payload: " + json.dumps({"version": "1.35.0"}) in result.output
+
+    def test_json_output(self, fake_client):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/state", "online")
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "mqtt", "read", "bridge/state"]
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data == {"topic": "zigbee2mqtt/bridge/state", "payload": "online"}
+
+    def test_no_retained_message_reports_null_payload(self, fake_client):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient()
+        ):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "mqtt", "read", "ghost/topic"]
+            )
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output)["payload"] is None
+
+    def test_timeout_option_forwarded(self, fake_client):
+        client = FakeBridgeClient()
+        calls: list[float] = []
+        original = client.collect_retained
+
+        def spy(topic, *, timeout=5.0):
+            calls.append(timeout)
+            return original(topic, timeout=timeout)
+
+        client.collect_retained = spy  # type: ignore[method-assign]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            _runner().invoke(
+                cli, ["--mqtt-host", "x", "mqtt", "read", "bridge/info", "--timeout", "7.5"]
+            )
+            assert calls == [7.5]
+
+    def test_help(self, fake_client):
+        result = _runner().invoke(cli, ["mqtt", "read", "--help"])
+        assert result.exit_code == 0
+
+
+class TestMqttWatch:
+    def test_empty_window_returns_empty_list(self, fake_client):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient()
+        ):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "mqtt", "watch", "sensor1/#", "--duration", "0"]
+            )
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output) == []
+
+    def test_text_output_uses_table(self, fake_client):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient()
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "mqtt", "watch", "sensor1/#", "--duration", "0"]
+            )
+            assert result.exit_code == 0, result.output
+
+    def test_delivered_messages_are_collected(self, fake_client):
+        client = FakeBridgeClient()
+        delivered: list[tuple[str, str]] = []
+
+        def subscribe(filter_, cb):
+            delivered.append((filter_, cb))
+            # deliver after subscribe, before the watch loop starts
+            cb("zigbee2mqtt/sensor1", '{"temperature":21.5}')
+
+        client.subscribe = subscribe  # type: ignore[method-assign]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--json", "--mqtt-host", "x", "mqtt", "watch", "sensor1/#", "--duration", "0"]
+            )
+            assert result.exit_code == 0, result.output
+            assert delivered[0][0] == "zigbee2mqtt/sensor1/#"
+            assert json.loads(result.output) == [
+                {"topic": "zigbee2mqtt/sensor1", "payload": {"temperature": 21.5}}
+            ]
+
+    def test_blank_filter_aborts(self, fake_client):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient()
+        ):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "mqtt", "watch", " "])
+            assert result.exit_code == 1
+            assert "topic is required" in result.output
+
+    def test_help(self, fake_client):
+        result = _runner().invoke(cli, ["mqtt", "watch", "--help"])
+        assert result.exit_code == 0
+
+
+class TestMqttTopics:
+    def test_returns_sorted_table_in_text_mode(self, fake_client):
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient()
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "mqtt", "topics", "--duration", "0"]
+            )
+            assert result.exit_code == 0, result.output
+
+    def test_prefix_subscribes_to_narrowed_filter(self, fake_client):
+        client = FakeBridgeClient()
+        filters: list[str] = []
+        client.subscribe = lambda f, cb: filters.append(f)  # type: ignore[method-assign]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            _runner().invoke(
+                cli,
+                [
+                    "--json",
+                    "--mqtt-host",
+                    "x",
+                    "mqtt",
+                    "topics",
+                    "--prefix",
+                    "lamp",
+                    "--duration",
+                    "0",
+                ],
+            )
+            assert filters == ["zigbee2mqtt/lamp/#"]
+
+    def test_help(self, fake_client):
+        result = _runner().invoke(cli, ["mqtt", "topics", "--help"])
+        assert result.exit_code == 0
+
+
+class TestMqttGroupRegistered:
+    def test_group_listed_in_root_help(self):
+        result = _runner().invoke(cli, ["--help"])
+        assert result.exit_code == 0, result.output
+        assert "mqtt" in result.output
+
+
+# ── workflow: read-back passthrough composition (v0.9.0) ─────────────────────
+
+
+class TestWorkflowInventoryThenRawPublish:
+    """device show → mqtt publish: resolve a name from the inventory, then
+    address its state topic directly — the raw-passthrough workflow."""
+
+    def test_show_then_publish_to_device_topic(self, fake_client):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(PING_DEVICES))
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            r = _runner()
+            shown = r.invoke(cli, ["--json", "--mqtt-host", "x", "device", "show", "Lounge Lamp"])
+            assert shown.exit_code == 0, shown.output
+            name = json.loads(shown.output)["friendly_name"]
+            published = r.invoke(
+                cli,
+                [
+                    "--json",
+                    "--mqtt-host",
+                    "x",
+                    "mqtt",
+                    "publish",
+                    f"{name}/set",
+                    '{"brightness":128}',
+                ],
+            )
+            assert published.exit_code == 0, published.output
+            assert client.published == [("zigbee2mqtt/Lounge Lamp/set", {"brightness": 128})]
+
+
+class TestWorkflowReadThenPublishRetained:
+    """mqtt read → mqtt publish --retain: mirror a retained payload to a
+    scriptable destination — the write-through workflow."""
+
+    def test_read_and_replay(self, fake_client):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/info", '{"version":"1.35.0"}')
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            r = _runner()
+            read = r.invoke(cli, ["--json", "--mqtt-host", "x", "mqtt", "read", "bridge/info"])
+            assert read.exit_code == 0, read.output
+            payload = json.loads(read.output)["payload"]
+            replayed = r.invoke(
+                cli,
+                [
+                    "--json",
+                    "--mqtt-host",
+                    "x",
+                    "mqtt",
+                    "publish",
+                    "backup/bridge/info",
+                    json.dumps(payload),
+                    "--retain",
+                ],
+            )
+            assert replayed.exit_code == 0, replayed.output
+            assert client.published == [("zigbee2mqtt/backup/bridge/info", payload)]
