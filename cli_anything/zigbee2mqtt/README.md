@@ -92,7 +92,7 @@ cli-anything-zigbee2mqtt converter remove my-override.js
 |---|---|
 | `bridge` | info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging |
 | `device` | list / find / show / rename / remove / configure / interview / options / set / get / state / watch / stale / battery / identify / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen |
-| `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state |
+| `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp |
 | `scene` | list / store / recall / add / rename / remove / remove-all (Zigbee scenes on a device or group) |
 | `ota` | check / update / schedule / unschedule (`check --all` sweeps the network) |
 | `network` | permit-join / map / touchlink-* / coordinator-check / backup |
@@ -113,6 +113,7 @@ cli_anything/zigbee2mqtt/
 │   ├── devices.py          # list/show/rename/remove/configure/interview/set/get
 │   │                       # + exposes / endpoints / clusters / reportings introspection
 │   ├── groups.py           # group CRUD + membership + groupcast set/get/state
+│   │                       # + find_group / set_group_light (lighting groupcast)
 │   ├── scenes.py           # scene store/recall/add/remove/rename + list
 │   ├── ota.py              # OTA check / update / schedule / unschedule
 │   │                       # + check_all (whole-network firmware sweep)

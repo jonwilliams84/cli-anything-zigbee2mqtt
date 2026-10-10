@@ -39,7 +39,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 |---|---|
 | `bridge` | `info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging` |
 | `device` | `list / find / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / identify / on / off / toggle / brightness / color / color-temp / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
-| `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state` |
+| `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp` — the last six are lighting groupcasts (v0.10.0) |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check [name \| --all] / update / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup` |
@@ -157,6 +157,14 @@ cli-anything-zigbee2mqtt group set kitchen-lights state=ON brightness=200 transi
 cli-anything-zigbee2mqtt group get kitchen-lights state brightness
 cli-anything-zigbee2mqtt --json group state kitchen-lights
 
+# The same lighting shortcuts available for devices — but groupcast (v0.10.0)
+cli-anything-zigbee2mqtt group on kitchen-lights
+cli-anything-zigbee2mqtt group off kitchen-lights --transition 2
+cli-anything-zigbee2mqtt group toggle kitchen-lights
+cli-anything-zigbee2mqtt group brightness kitchen-lights 128 --transition 2
+cli-anything-zigbee2mqtt group color kitchen-lights '#ff8800'
+cli-anything-zigbee2mqtt group color-temp kitchen-lights 2700 --kelvin
+
 # Scenes — store the room as it is now, recall it later
 cli-anything-zigbee2mqtt group set kitchen-lights state=ON brightness=60
 cli-anything-zigbee2mqtt scene store kitchen-lights 1 --name Chill
@@ -182,6 +190,21 @@ in a single groupcast. Multi-gang devices keep scenes per endpoint, so pass
 `--endpoint <n>`. Valid ids are 0-255. `scene list` reads back the `scenes`
 array z2m publishes in the target's retained state (falling back to the retained
 `bridge/groups` inventory) so you can verify a store actually landed.
+
+### Group lighting: what to know
+
+`group on/off/toggle/brightness/color/color-temp` (v0.10.0) mirror the device
+lighting shortcuts, but address the room in ONE Zigbee groupcast — one radio
+frame instead of `N` unicasts, and every member changes in the same instant.
+GROUP is the group's friendly_name or numeric id, resolved against the retained
+`bridge/groups` inventory before anything is sent: an unknown group aborts
+without publishing (a group and a device can share a friendly name, so blind
+writes would sometimes hit the wrong one). Argument validation — brightness
+0-254, mireds 150-500 (or Kelvin 1000-20000 with `--kelvin`), named/hex/rgb
+colors — happens before the MQTT connection, exactly like `device brightness`.
+`--json` output carries `{"friendly_name", "id", "topic", "published", "rc"}`;
+the group confirms by republishing its aggregate state, readable with
+`group state <GROUP>`.
 
 ### Exposes, availability and raw ZCL: what to know
 

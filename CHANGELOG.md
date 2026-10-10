@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here.
 
+## [0.10.0] — 2026-10-10
+
+- **Group lighting convenience layer**: the device lighting shortcuts added in
+  v0.7.0 (`device on/off/toggle/brightness/color/color-temp`) now have group
+  twins — until now the only way to light a room was hand-writing a
+  `group set` payload, and getting `state` casing or a mireds value wrong
+  published to the wire anyway.
+  - `group on <GROUP> [--transition S]`, `group off <GROUP> [--transition S]`,
+    `group toggle <GROUP>`, `group brightness <GROUP> 0-254`
+    `[--transition S]`, `group color <GROUP> red|#0088ff|'0,136,255'`
+    `[--transition S]`, `group color-temp <GROUP> mireds [--kelvin]
+    [--transition S]` — GROUP is the group's friendly_name or numeric id.
+    One `--transition` flag each, exactly like the device commands.
+  - Values are validated **before** any MQTT connection (`device on z2m
+    light 300` aborts with "brightness must be between 0 and 254", never
+    reaches the broker), and the group is resolved against the retained
+    `bridge/groups` inventory first: an unknown group aborts without
+    publishing instead of firing a groupcast into a (possibly device-named)
+    topic.
+  - `--json` output keeps the device lighting shape plus the group id:
+    `{"friendly_name", "id", "topic", "published", "rc"}` — gate scripts on
+    `rc` / `published` like the device lighting commands.
+- Why it matters: writing to a group is a single Zigbee groupcast — one radio
+  frame for every bulb in the room, visually atomic. It is both faster and
+  more robust than looping `device set` across members, and should be the
+  default for room control. Recommended loop: `group add` + `group
+  add-member` to build the room, `group members` to verify it, `group on /
+  brightness / color-temp` to drive it, `scene store` to snapshot the result.
+- Core functions `find_group` and `set_group_light` in `core/groups.py`
+  (payload validation reuses `devices.light_payload`, so group and device
+  lighting can never drift apart).
+- 32 new tests (14 unit + 18 E2E/workflow); total suite 1087 passed, gate
+  green (coverage 98.9%, ruff check/format clean, bandit clean).
+
 ## [0.9.0] — 2026-10-03
 
 - **Raw MQTT passthrough**: new `mqtt` command group — `mqtt publish`,

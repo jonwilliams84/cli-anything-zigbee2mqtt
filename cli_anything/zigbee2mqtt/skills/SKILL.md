@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state, Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state and the lighting convenience layer groupcast to rooms (group on/off/toggle/brightness/color/color-temp), Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -25,7 +25,8 @@ agent can reliably tell whether an operation succeeded.
   names z2m will accept (`device endpoints`, `device clusters`, `bridge definitions`).
 - Reaching a cluster attribute no converter models (`device read` / `device write`).
 - Auditing or verifying attribute reporting (`device reportings`).
-- Driving a whole room at once (`group set`) instead of looping over members.
+- Driving a whole room at once (`group set`) instead of looping over members —
+  or the validated shortcuts (`group on`, `group brightness`, `group color`…).
 - Capturing or replaying a lighting scene (`scene store` / `scene recall`).
 - Generating a network map (raw / graphviz / plantuml).
 - Pushing or removing an external converter file (e.g. to override an exposes
@@ -50,7 +51,7 @@ Two external deps:
 |---|---|
 | `bridge` | `bridge info`, `bridge state`, `bridge restart`, `bridge restart --via-kubectl`, `bridge health`, `bridge options-get`, `bridge options-set '{"advanced":{"log_level":"info"}}'`, `bridge definitions`, `bridge definitions --cluster genOnOff [--commands]`, `bridge definitions --custom`, `bridge watch-events --duration 30`, `bridge watch-logging --duration 10` |
 | `device` | `device list`, `device list --full`, `device show <name>`, `device find [--like lamp] [--manufacturer X] [--model M] [--vendor V] [--type Router] [--power battery] [--capability brightness] [--supported] [--disabled]` (inventory search, combinable, local read), `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device identify <name> [--duration 5]` (flash the device via the Zigbee Identify cluster), `device on <name> [--transition S]`, `device off <name> [--transition S]`, `device toggle <name>`, `device brightness <name> 0-254 [--transition S]`, `device color <name> red|#ff8800|'255,136,0' [--transition S]`, `device color-temp <name> mireds [--kelvin] [--transition S]` (lighting shortcuts, values validated before any MQTT connection), `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]`, `device exposes <name> --settable`, `device endpoints <name>`, `device clusters <name> --direction input|output`, `device reportings [<name>]`, `device availability <name>`, `device availability-sweep --offline-only`, `device ping <name> [--timeout S]` (bridge round-trip liveness check, exits 1 when the device does not answer), `device read <name> --cluster genBasic --attribute zclVersion`, `device write <name> --cluster genOnOff onOff=1`, `device disable <name>`, `device enable <name>`, `device last-seen <name>` |
-| `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained) |
+| `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained), `group on/off/toggle <name> [--transition S]`, `group brightness <name> 0-254 [--transition S]`, `group color <name> red|#ff8800|'255,136,0' [--transition S]`, `group color-temp <name> mireds [--kelvin] [--transition S]` (lighting groupcasts; values validated pre-connect, unknown groups abort before publishing) |
 | `scene` | `scene list <target>`, `scene store <target> <id> --name Chill`, `scene recall <target> <id>`, `scene add <target> <id> --state ON --brightness 200 --color-temp 370 --transition 2`, `scene rename <target> <id> <name>`, `scene remove <target> <id>`, `scene remove-all <target> --yes` — TARGET is a device or group friendly_name; add `--endpoint <n>` for multi-gang devices |
 | `ota` | `ota check <name>`, `ota check --all` (network firmware sweep), `ota check --all --with-update`, `ota update <name>`, `ota schedule <name>`, `ota unschedule <name>` |
 | `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup` |
@@ -79,6 +80,12 @@ unattended use, set `--force` (network removal skipped) and/or `--block`
 **Group commands are a single groupcast.** `group set kitchen state=ON` changes
 every member at once (visually atomic, one radio transmission). Never loop
 `device set` over members — that is N unicasts and the lights step raggedly.
+For room lighting, prefer the typed shortcuts over hand-writing payloads:
+`group on/off/toggle/brightness/color/color-temp <group>` (v0.10.0) validate
+values up-front (brightness 0-254, mireds 150-500 or `--kelvin`), resolve the
+group against the retained `bridge/groups` inventory (an unknown group aborts
+before any publish — a blind `group set` to a mistyped name can hit a device
+that shares the name), and ride the same one-groupcast wire.
 
 **Scene commands are Zigbee cluster commands, not bridge requests.** They publish
 to `<base>/<target>/set` and have NO `bridge/response`, so the exit code only
@@ -141,8 +148,9 @@ brightness/color/color-temp` accept IEEE addresses (resolved to the friendly
 name first) and build their payload up-front — `device brightness <name> 255`
 aborts with "between 0 and 254" before any broker connection is opened. They
 publish to `<base>/<name>/set` like `device set` (no bridge/response), so
-confirm with `device state <name>`. Whole-room changes still belong in a
-`group set` groupcast.
+confirm with `device state <name>`. Whole-room changes belong in the group
+twins (`group on <group>`, `group brightness <group> <level>`, …) — same
+validation, one groupcast instead of a per-device set.
 
 **`ota check --all` sweeps the whole network for firmware.** One
 `device/ota_update/check` round trip per device (coordinator and disabled
@@ -333,8 +341,11 @@ cli-anything-zigbee2mqtt group add kitchen-lights
 cli-anything-zigbee2mqtt group add-member kitchen-lights light_kitchen_1
 cli-anything-zigbee2mqtt group add-member kitchen-lights light_kitchen_2
 
-# Dial the room in, then snapshot it as scene 1 on every member.
-cli-anything-zigbee2mqtt group set kitchen-lights state=ON brightness=60 color_temp=450
+# Dial the room in (one groupcast; values validated before connecting), then
+# snapshot it as scene 1 on every member.
+cli-anything-zigbee2mqtt group on kitchen-lights
+cli-anything-zigbee2mqtt group brightness kitchen-lights 60 --transition 2
+cli-anything-zigbee2mqtt group color-temp kitchen-lights 450
 cli-anything-zigbee2mqtt scene store kitchen-lights 1 --name Chill
 
 # Verify it landed, then replay it (one groupcast).

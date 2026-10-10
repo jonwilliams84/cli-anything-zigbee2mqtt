@@ -175,6 +175,62 @@ def get_state(client: BridgeClient, group: str, keys: list[str]) -> int:
     return client.publish(f"{client.base_topic}/{group}/get", {k: "" for k in keys})
 
 
+# ── group lighting convenience layer (mirrors device on / brightness / ...) ─
+
+_LIGHT_CACHE_TIMEOUT = 5.0
+
+
+def find_group(
+    client: BridgeClient, group: str, *, timeout: float = _LIGHT_CACHE_TIMEOUT
+) -> Optional[dict]:
+    """Locate a group record from the retained ``bridge/groups`` inventory.
+
+    Matches by friendly_name (case-insensitive) or numeric id. Returns the
+    group dict (with ``id`` and ``friendly_name`` keys) or ``None`` when no
+    group matches.
+    """
+    if not group:
+        raise ValueError("group is required (friendly_name or numeric id)")
+    wanted = str(group).lower()
+    for grp in list_groups(client, timeout=timeout):
+        if not isinstance(grp, dict):
+            continue
+        if (
+            str(grp.get("friendly_name", "")).lower() == wanted
+            or str(grp.get("id", "")).lower() == wanted
+        ):
+            return grp
+    return None
+
+
+def set_group_light(client: BridgeClient, group: str, payload: dict) -> dict:
+    """Publish a *validated* light payload to ``<base>/<group>/set`` (groupcast).
+
+    The payload should come from :func:`devices.light_payload`, which validates
+    state/brightness/color/color-temp/transition BEFORE any MQTT connection.
+    The group is resolved against the retained ``bridge/groups`` inventory
+    first — addressing a group of a device with the same friendly_name would
+    otherwise hit the device, so an unknown group aborts before any publish.
+    Returns ``{"friendly_name", "topic", "published", "id", "rc"}`` — same
+    shape as :func:`devices.set_light`.
+    """
+    if not payload:
+        raise ValueError("payload must be a non-empty dict")
+    record = find_group(client, group, timeout=_LIGHT_CACHE_TIMEOUT)
+    if record is None:
+        raise ValueError(f"no group matching {group!r}")
+    name = record.get("friendly_name") or str(group)
+    topic = f"{client.base_topic}/{name}/set"
+    rc = client.publish(topic, payload)
+    return {
+        "friendly_name": name,
+        "id": record.get("id"),
+        "topic": topic,
+        "published": payload,
+        "rc": rc,
+    }
+
+
 def read_state(client: BridgeClient, group: str, *, timeout: float = 3.0) -> dict:
     """Return the group's last retained state payload (one-shot, never blocks).
 

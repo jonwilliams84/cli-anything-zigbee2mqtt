@@ -131,6 +131,27 @@ This is exactly the CI gate; it must exit 0 before merge.
   `TestMqttWatch`, `TestMqttTopics`, `TestMqttGroupRegistered`,
   `TestWorkflowInventoryThenRawPublish`, `TestWorkflowReadThenPublishRetained`).
 
+## Latest run (refine pass 9 / v0.10.0, 2026-10-10)
+
+- 1087 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`), total 98.85%
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **group lighting convenience layer** — the v0.7.0 device
+  lighting shortcuts now have group twins: `group on/off/toggle/brightness/
+  color/color-temp`. One Zigbee groupcast per command (one radio frame for
+  every bulb in the room) instead of hand-writing `group set` payloads.
+  Arguments are validated before any MQTT connection (`group brightness
+  kitchen 255` aborts with "between 0 and 254") and the group is resolved
+  against the retained `bridge/groups` inventory first, so an unknown group
+  aborts without publishing. Core functions `find_group` and
+  `set_group_light` in `core/groups.py` (payload validation reuses
+  `devices.light_payload`, so group and device lighting can never drift).
+  32 new tests: 14 unit (`test_core.py`: `TestGroupFind`,
+  `TestGroupSetLight`) and 18 E2E/workflow (`test_full_e2e.py`:
+  `TestGroupLightingCommands`, `TestGroupLightingWorkflows` — including
+  `group add → add-member → group on → group state` and
+  `scene store → group toggle` round trips).
+
 ## Previous run (refine pass 7 / v0.8.0, 2026-09-27)
 
 - 991 passed, 0 failed

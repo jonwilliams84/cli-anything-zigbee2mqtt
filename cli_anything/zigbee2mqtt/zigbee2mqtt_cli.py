@@ -1371,7 +1371,12 @@ def device_write(ctx, ident, fields, cluster, endpoint, manufacturer_code, optio
 
 @cli.group()
 def group():
-    """Zigbee groups — list / add / remove / membership."""
+    """Zigbee groups — list / membership / lighting groupcasts / scenes etc.
+
+    Mutations are bridge requests; `group on/off/toggle/brightness/color/
+    color-temp` and `group set/get/state` are Zigbee groupcasts to
+    `<base>/<group>/set` — one radio frame for every bulb in the room.
+    """
 
 
 @group.command("list")
@@ -1524,6 +1529,124 @@ def group_state(ctx, group_name, timeout):
     """Read the group's last retained state payload (one-shot)."""
     with make_client(ctx) as c:
         emit(ctx, groups_core.read_state(c, group_name, timeout=timeout))
+
+
+# ─── group lighting convenience layer (mirrors the device commands) ─────────
+
+
+def _group_light_emit(ctx: click.Context, group_name: str, payload: dict) -> None:
+    """Resolve a group and single-groupcast a light payload.
+
+    Shared by the group lighting convenience commands; aborts with exit 1 when
+    the group is unknown instead of publishing to a (possibly device-named)
+    topic.
+    """
+    with make_client(ctx) as c:
+        try:
+            emit(ctx, groups_core.set_group_light(c, group_name, payload))
+        except ValueError as exc:
+            _abort(str(exc))
+
+
+@group.command("on")
+@click.argument("group_name")
+@click.option("--transition", type=float, default=None, help="Seconds to fade in.")
+@click.pass_context
+def group_on(ctx, group_name, transition):
+    """Turn every light in GROUP_NAME on with one Zigbee groupcast.
+
+    GROUP_NAME is the group's friendly_name or numeric id (matched against the
+    retained bridge/groups inventory). Only the group's light members react —
+    check membership with `group members GROUP_NAME`. Values are validated
+    BEFORE any MQTT connection; an unknown group aborts without publishing.
+    """
+    try:
+        payload = devices_core.light_payload(state="ON", transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_light_emit(ctx, group_name, payload)
+
+
+@group.command("off")
+@click.argument("group_name")
+@click.option("--transition", type=float, default=None, help="Seconds to fade out.")
+@click.pass_context
+def group_off(ctx, group_name, transition):
+    """Turn every light in GROUP_NAME off with one Zigbee groupcast."""
+    try:
+        payload = devices_core.light_payload(state="OFF", transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_light_emit(ctx, group_name, payload)
+
+
+@group.command("toggle")
+@click.argument("group_name")
+@click.pass_context
+def group_toggle(ctx, group_name):
+    """Flip every light in GROUP_NAME (publishes {"state": "TOGGLE"})."""
+    try:
+        payload = devices_core.light_payload(state="TOGGLE")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_light_emit(ctx, group_name, payload)
+
+
+@group.command("brightness")
+@click.argument("group_name")
+@click.argument("level", type=int)
+@click.option("--transition", type=float, default=None, help="Seconds to fade to the level.")
+@click.pass_context
+def group_brightness(ctx, group_name, level, transition):
+    """Set every light's brightness in GROUP_NAME (0-254, standard Zigbee)."""
+    try:
+        payload = devices_core.light_payload(brightness=level, transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_light_emit(ctx, group_name, payload)
+
+
+@group.command("color")
+@click.argument("group_name")
+@click.argument("color")
+@click.option("--transition", type=float, default=None, help="Seconds to fade to the color.")
+@click.pass_context
+def group_color(ctx, group_name, color, transition):
+    """Set every light's color in GROUP_NAME: named (red), hex (#ff8800) or '255,136,0'."""
+    try:
+        payload = devices_core.light_payload(color=color, transition=transition)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_light_emit(ctx, group_name, payload)
+
+
+@group.command("color-temp")
+@click.argument("group_name")
+@click.argument("mireds", type=int)
+@click.option(
+    "--kelvin", is_flag=True, default=False, help="Interpret the value as Kelvin, not mireds."
+)
+@click.option("--transition", type=float, default=None, help="Seconds to fade.")
+@click.pass_context
+def group_color_temp(ctx, group_name, mireds, kelvin, transition):
+    """Set every light's colour temperature in GROUP_NAME (mireds 150-500).
+
+    Lower is cooler. With --kelvin the value is read in Kelvin (1000-20000)
+    and converted.
+    """
+    try:
+        payload = devices_core.light_payload(
+            color_temp=mireds, kelvin=kelvin, transition=transition
+        )
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_light_emit(ctx, group_name, payload)
 
 
 # ──────────────────────────────────────────────────────── scenes
