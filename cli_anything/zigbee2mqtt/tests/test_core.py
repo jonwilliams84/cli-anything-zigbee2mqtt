@@ -3647,3 +3647,133 @@ class TestListTopics:
         assert len(result) == 1
         assert result[0]["bytes"] == 15
         assert result[0]["preview"] == '{"state":"OFF"}'
+
+
+# ── group lighting convenience layer (v0.10.0 refine) ────────────────────────
+
+GROUP_INVENTORY = json.dumps(
+    [
+        {"id": 1, "friendly_name": "kitchen-lights", "members": [{"ieee_address": "0xaa"}]},
+        {"id": 2, "friendly_name": "Hallway", "members": []},
+        "junk-entry",
+    ]
+)
+
+
+class TestGroupFind:
+    def test_find_by_friendly_name_case_insensitive(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        grp = groups_core.find_group(c, "KITCHEN-LIGHTS")
+        assert grp["id"] == 1
+        assert grp["friendly_name"] == "kitchen-lights"
+
+    def test_find_by_numeric_id_as_int(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        assert groups_core.find_group(c, 2)["friendly_name"] == "Hallway"
+
+    def test_find_by_numeric_id_as_string(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        assert groups_core.find_group(c, "2")["friendly_name"] == "Hallway"
+
+    def test_find_none_when_unknown(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        assert groups_core.find_group(c, "nope") is None
+
+    def test_find_none_when_no_retained_inventory(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        assert groups_core.find_group(c, "kitchen") is None
+
+    def test_find_tolerates_non_dict_entries(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        # "junk-entry" must be skipped, not raise
+        assert groups_core.find_group(c, "hallway")["friendly_name"] == "Hallway"
+
+    def test_find_requires_group(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="group is required"):
+            groups_core.find_group(c, "")
+
+
+class TestGroupSetLight:
+    def test_publishes_groupcast_to_group_set_topic(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        result = groups_core.set_group_light(c, "kitchen-lights", {"state": "ON"})
+        assert result["topic"] == "zigbee2mqtt/kitchen-lights/set"
+        assert result["published"] == {"state": "ON"}
+        assert result["friendly_name"] == "kitchen-lights"
+        assert result["id"] == 1
+        assert result["rc"] == 0
+
+    def test_numeric_group_id_resolves_to_friendly_name(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        result = groups_core.set_group_light(c, 2, {"brightness": 10})
+        assert result["topic"] == "zigbee2mqtt/Hallway/set"
+        assert result["friendly_name"] == "Hallway"
+
+    def test_unknown_group_aborts_before_publish(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        with pytest.raises(ValueError, match="no group matching 'ghost'"):
+            groups_core.set_group_light(c, "ghost", {"state": "ON"})
+        assert c.published == []
+
+    def test_no_retained_inventory_aborts(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="no group matching"):
+            groups_core.set_group_light(c, "kitchen", {"state": "ON"})
+        assert c.published == []
+
+    def test_empty_payload_rejected(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="non-empty dict"):
+            groups_core.set_group_light(c, "kitchen", {})
+
+    def test_rc_is_propagated(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        c.rc = 5
+        result = groups_core.set_group_light(c, "kitchen-lights", {"state": "OFF"})
+        assert result["rc"] == 5
+
+    def test_works_with_light_payload_builder(self):
+        from cli_anything.zigbee2mqtt.core import devices as devices_core
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        payload = devices_core.light_payload(color_temp=2700, kelvin=True, transition=2)
+        result = groups_core.set_group_light(c, "kitchen-lights", payload)
+        assert result["published"] == {"color_temp": 370, "transition": 2.0}

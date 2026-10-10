@@ -3975,3 +3975,217 @@ class TestWorkflowReadThenPublishRetained:
             )
             assert replayed.exit_code == 0, replayed.output
             assert client.published == [("zigbee2mqtt/backup/bridge/info", payload)]
+
+
+# ── group lighting convenience layer (v0.10.0 refine) ────────────────────────
+
+E2E_GROUPS = json.dumps(
+    [
+        {"id": 1, "friendly_name": "kitchen-lights", "members": [{"ieee_address": "0xaa"}]},
+        {"id": 2, "friendly_name": "Hallway", "members": []},
+    ]
+)
+
+
+class TestGroupLightingCommands:
+    """group on / off / toggle / brightness / color / color-temp (v0.10.0)."""
+
+    def _client(self):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/groups", E2E_GROUPS)
+        return client
+
+    def _run(self, client, *args, as_json=False):
+        argv = (["--json"] if as_json else []) + ["--mqtt-host", "x", *args]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            return _runner().invoke(cli, argv)
+
+    def test_on_groupcasts_state_on(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "on", "kitchen-lights")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"state": "ON"})]
+
+    def test_off_with_transition(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "off", "kitchen-lights", "--transition", "2.5")
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/kitchen-lights/set", {"state": "OFF", "transition": 2.5})
+        ]
+
+    def test_toggle(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "toggle", "kitchen-lights")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"state": "TOGGLE"})]
+
+    def test_brightness(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "brightness", "kitchen-lights", "200")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"brightness": 200})]
+
+    def test_brightness_with_transition(self, fake_client):
+        client = self._client()
+        result = self._run(
+            client, "group", "brightness", "kitchen-lights", "10", "--transition", "1"
+        )
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/kitchen-lights/set", {"brightness": 10, "transition": 1.0})
+        ]
+
+    def test_brightness_out_of_range_aborts_before_connect(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "brightness", "kitchen-lights", "255")
+        assert result.exit_code != 0
+        assert "between 0 and 254" in result.output
+        assert client.published == []
+
+    def test_color_hex(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "color", "kitchen-lights", "#0088ff")
+        assert result.exit_code == 0, result.output
+        assert client.published == [
+            ("zigbee2mqtt/kitchen-lights/set", {"color": {"r": 0, "g": 136, "b": 255}})
+        ]
+
+    def test_color_invalid_aborts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "color", "kitchen-lights", "sparkly")
+        assert result.exit_code != 0
+        assert "unrecognised color" in result.output
+        assert client.published == []
+
+    def test_color_temp_mireds(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "color-temp", "kitchen-lights", "370")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"color_temp": 370})]
+
+    def test_color_temp_kelvin_converts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "color-temp", "kitchen-lights", "2700", "--kelvin")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"color_temp": 370})]
+
+    def test_color_temp_kelvin_out_of_range_aborts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "color-temp", "kitchen-lights", "800", "--kelvin")
+        assert result.exit_code != 0
+        assert client.published == []
+
+    def test_numeric_group_id_resolves_to_friendly_name_topic(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "on", "2")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Hallway/set", {"state": "ON"})]
+
+    def test_unknown_group_aborts_without_publish(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "on", "ghost-group")
+        assert result.exit_code != 0
+        assert "no group matching" in result.output
+        assert client.published == []
+
+    def test_json_output_shape(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "brightness", "kitchen-lights", "128", as_json=True)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["topic"] == "zigbee2mqtt/kitchen-lights/set"
+        assert data["published"] == {"brightness": 128}
+        assert data["friendly_name"] == "kitchen-lights"
+        assert data["id"] == 1
+        assert data["rc"] == 0
+
+    def test_help_lists_lighting_commands(self, fake_client):
+        result = _runner().invoke(cli, ["group", "--help"])
+        assert result.exit_code == 0, result.output
+        for cmd in ("on", "off", "toggle", "brightness", "color", "color-temp"):
+            assert cmd in result.output
+
+
+class TestGroupLightingWorkflows:
+    """Combine group lighting with existing inventory/state commands."""
+
+    def test_add_group_then_members_then_light_it(self, fake_client):
+        """group add → group add-member → group on → group state."""
+        client = FakeBridgeClient()
+        client.set_response(
+            "group/add", {"status": "ok", "data": {"id": 7, "friendly_name": "dining"}}
+        )
+        client.set_response("group/members/add", {"status": "ok", "data": {}})
+        groups_payload = json.dumps(
+            [{"id": 7, "friendly_name": "dining", "members": [{"ieee_address": "0xbb"}]}]
+        )
+        state_payload = json.dumps({"state": "ON", "brightness": 90})
+        r = _runner()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            created = r.invoke(cli, ["--mqtt-host", "x", "group", "add", "dining"])
+            assert created.exit_code == 0, created.output
+            client.set_retained("zigbee2mqtt/bridge/groups", groups_payload)
+            addm = r.invoke(
+                cli, ["--json", "--mqtt-host", "x", "group", "add-member", "dining", "0xbbb"]
+            )
+            assert addm.exit_code == 0, addm.output
+            lit = r.invoke(cli, ["--mqtt-host", "x", "group", "on", "dining"])
+            assert lit.exit_code == 0, lit.output
+            assert client.published == [("zigbee2mqtt/dining/set", {"state": "ON"})]
+            # group state now reflects the publish
+            client.set_retained("zigbee2mqtt/dining", state_payload)
+            st = r.invoke(cli, ["--json", "--mqtt-host", "x", "group", "state", "dining"])
+            assert st.exit_code == 0, st.output
+            assert json.loads(st.output)["state"] == "ON"
+            assert json.loads(st.output)["brightness"] == 90
+
+    def test_scene_then_group_light_roundtrip(self, fake_client):
+        """scene store on a group then group toggle — same groupcast topic."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/groups", E2E_GROUPS)
+        r = _runner()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            stored = r.invoke(
+                cli,
+                [
+                    "--json",
+                    "--mqtt-host",
+                    "x",
+                    "scene",
+                    "store",
+                    "kitchen-lights",
+                    "1",
+                    "--name",
+                    "Chill",
+                ],
+            )
+            assert stored.exit_code == 0, stored.output
+            assert json.loads(stored.output)["published"] == {
+                "scene_store": {"ID": 1, "name": "Chill"}
+            }
+            # then light the same group — both ride <base>/<group>/set
+            toggle = r.invoke(cli, ["--mqtt-host", "x", "group", "toggle", "kitchen-lights"])
+            assert toggle.exit_code == 0, toggle.output
+            assert client.published == [
+                ("zigbee2mqtt/kitchen-lights/set", {"scene_store": {"ID": 1, "name": "Chill"}}),
+                ("zigbee2mqtt/kitchen-lights/set", {"state": "TOGGLE"}),
+            ]
+
+    def test_workflow_members_then_color(self, fake_client):
+        """Verify membership first (`group members`), then color the group."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/groups", E2E_GROUPS)
+        r = _runner()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = r.invoke(cli, ["--mqtt-host", "x", "group", "members", "kitchen-lights"])
+            assert result.exit_code == 0, result.output
+            # then light the same group by color
+            result = r.invoke(cli, ["--mqtt-host", "x", "group", "color", "kitchen-lights", "red"])
+            assert result.exit_code == 0, result.output
+            assert client.published == [
+                ("zigbee2mqtt/kitchen-lights/set", {"color": {"r": 255, "g": 0, "b": 0}})
+            ]
+        assert client.published == [
+            ("zigbee2mqtt/kitchen-lights/set", {"color": {"r": 255, "g": 0, "b": 0}})
+        ]
