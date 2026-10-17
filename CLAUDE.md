@@ -13,7 +13,7 @@ of `cli-anything-homeassistant`. Python 3.10+, Click + paho-mqtt.
   watch loops must treat `--duration 0` as a valid non-blocking window
   (`duration is not None`, not truthiness — the `time.time() + duration if
   duration else None` form hung on 0).
-- `cli_anything/zigbee2mqtt/core/` — one module per command group: `mqtt_client.py` (`BridgeClient`, request/response correlation), `bridge.py`, `devices.py` (incl. `exposes` introspection, availability sweep, `search_devices` inventory search, `identify` flash, `ping` liveness round trip, lighting helpers `light_payload`/`set_light` behind `device on/off/toggle/brightness/color/color-temp`), `attributes.py` (raw ZCL cluster read/write), `bindings.py`, `groups.py` (CRUD + groupcast set/get/state), `scenes.py` (Zigbee scene store/recall/add/rename/remove), `ota.py`, `admin.py`, `converters.py`, `extensions.py`, `install_code.py`, `mqtt_raw.py` (raw MQTT passthrough —
+- `cli_anything/zigbee2mqtt/core/` — one module per command group: `mqtt_client.py` (`BridgeClient`, request/response correlation), `bridge.py`, `devices.py` (incl. `exposes` introspection, availability sweep, `search_devices` inventory search, `identify` flash, `ping` liveness round trip, lighting helpers `light_payload`/`set_light` behind `device on/off/toggle/brightness/color/color-temp`), `attributes.py` (raw ZCL cluster read/write), `bindings.py`, `groups.py` (CRUD + groupcast set/get/state), `scenes.py` (Zigbee scene store/recall/add/rename/remove), `ota.py` (check/update/abort/schedule/unschedule, `--downgrade` rollback variants, `check_all` network sweep), `admin.py`, `converters.py`, `extensions.py`, `install_code.py`, `mqtt_raw.py` (raw MQTT passthrough —
 `mqtt publish/read/watch/topics`, base-topic resolution + JSON-payload coercion in client-free helpers `normalize_topic`/`coerce_payload`), `k8s_backend.py` (kubectl helpers), `project.py` (local profile).
 - `cli_anything/zigbee2mqtt/tests/` — `test_core.py`, `test_refine.py`, `test_full_e2e.py` (CliRunner end-to-end), plus focused regression/coverage suites. Run against a fake MQTT transport; no broker needed.
 - `cli_anything/zigbee2mqtt/skills/SKILL.md` and `skills/cli-anything-zigbee2mqtt/SKILL.md` — agent-facing skill docs (keep in sync with CLI changes).
@@ -26,8 +26,8 @@ python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v          # full suite, no b
 cli-anything-zigbee2mqtt --help
 cli-anything-zigbee2mqtt --mqtt-host <broker> --base-topic zigbee2mqtt config save  # first-time setup
 ```
-No lint/CI config present. No release automation — version is hand-bumped in `setup.py`
-(note: README/SKILL describe v0.2.0 but `setup.py` still says `version="0.1.0"`).
+Version is hand-bumped in `setup.py` (currently `0.11.0`) and mirrored by
+`__version__` in `cli_anything/zigbee2mqtt/__init__.py` / README / SKILL docs.
 
 ## Architecture notes
 - Every mutation publishes `zigbee2mqtt/bridge/request/<path>` and reads the matching

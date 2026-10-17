@@ -3777,3 +3777,129 @@ class TestGroupSetLight:
         payload = devices_core.light_payload(color_temp=2700, kelvin=True, transition=2)
         result = groups_core.set_group_light(c, "kitchen-lights", payload)
         assert result["published"] == {"color_temp": 370, "transition": 2.0}
+
+
+# ── ota abort + downgrade (v0.11.0 refine) ───────────────────────────────────
+
+
+class _RecordingRequestClient:
+    """Client recording every request path/payload so tests can pin the wire."""
+
+    base_topic = "zigbee2mqtt"
+
+    def __init__(self, canned=None):
+        self.calls: list[tuple] = []
+        self._canned = canned or {}
+
+    def request(self, path, payload=None, *, timeout=15.0):
+        self.calls.append((path, payload, timeout))
+        return self._canned.get(path, {"status": "ok"})
+
+
+class TestOtaAbort:
+    def test_abort_hits_the_right_path(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = _RecordingRequestClient()
+        assert ota_core.abort(c, "Radiator") == {"status": "ok"}
+        assert c.calls[0][0] == "device/ota_update/update/abort"
+        assert c.calls[0][1] == {"id": "Radiator"}
+
+    def test_abort_requires_id(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        with pytest.raises(ValueError, match="id_ is required"):
+            ota_core.abort(_RecordingRequestClient(), "")
+
+
+class TestOtaDowngrade:
+    """check / update / schedule route to the /downgrade topics when asked."""
+
+    def test_check_default_topic_unchanged(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = _RecordingRequestClient()
+        ota_core.check(c, "Radiator")
+        assert c.calls[0][0] == "device/ota_update/check"
+
+    def test_check_downgrade_topic(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = _RecordingRequestClient()
+        ota_core.check(c, "Radiator", downgrade=True)
+        assert c.calls[0][0] == "device/ota_update/check/downgrade"
+        assert c.calls[0][1] == {"id": "Radiator"}
+
+    def test_update_default_topic_unchanged(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = _RecordingRequestClient()
+        ota_core.update(c, "Radiator")
+        assert c.calls[0][0] == "device/ota_update/update"
+
+    def test_update_downgrade_topic(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = _RecordingRequestClient()
+        ota_core.update(c, "Radiator", downgrade=True, timeout=600.0)
+        assert c.calls[0][0] == "device/ota_update/update/downgrade"
+        assert c.calls[0][2] == 600.0
+
+    def test_schedule_default_topic_unchanged(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = _RecordingRequestClient()
+        ota_core.schedule(c, "Radiator")
+        assert c.calls[0][0] == "device/ota_update/schedule"
+
+    def test_schedule_downgrade_topic(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        c = _RecordingRequestClient()
+        ota_core.schedule(c, "Radiator", downgrade=True)
+        assert c.calls[0][0] == "device/ota_update/schedule/downgrade"
+        assert c.calls[0][1] == {"id": "Radiator"}
+
+
+class TestOtaCheckAllDowngrade:
+    """The network sweep honors the downgrade flag (downgrade index used)."""
+
+    @staticmethod
+    def _device(name, *, ieee=None, type_="EndDevice", disabled=False):
+        return {
+            "friendly_name": name,
+            "ieee_address": ieee or f"0x{abs(hash(name)):016x}",
+            "type": type_,
+            "disabled": disabled,
+        }
+
+    def test_sweep_downgrade_topics(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        paths = []
+
+        class SweepClient(FakeBridgeClientForBridge):
+            def request(self, path, payload=None, *, timeout=15.0):
+                paths.append(path)
+                return {"status": "ok", "data": {"update_available": False}}
+
+        client = SweepClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps([self._device("lamp1")]))
+        rows = ota_core.check_all(client, downgrade=True)
+        assert paths == ["device/ota_update/check/downgrade"]
+        assert rows[0]["status"] == "up_to_date"
+
+    def test_sweep_default_topics_unchanged(self):
+        from cli_anything.zigbee2mqtt.core import ota as ota_core
+
+        paths = []
+
+        class SweepClient(FakeBridgeClientForBridge):
+            def request(self, path, payload=None, *, timeout=15.0):
+                paths.append(path)
+                return {"status": "ok", "data": {"update_available": True}}
+
+        client = SweepClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps([self._device("lamp1")]))
+        ota_core.check_all(client)
+        assert paths == ["device/ota_update/check"]

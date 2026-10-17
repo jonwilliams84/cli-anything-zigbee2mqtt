@@ -7,26 +7,64 @@ from typing import Optional
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient
 
 
-def check(client: BridgeClient, id_: str, *, timeout: float = 30.0) -> dict:
+def check(
+    client: BridgeClient, id_: str, *, timeout: float = 30.0, downgrade: bool = False
+) -> dict:
     """Ask z2m to check if a device has a firmware update available.
+
+    With *downgrade* the request goes to the ``check/downgrade`` topic
+    instead, so z2m looks up the device in the downgrade (latest-1) OTA
+    index — the answer tells you whether a rollback of the same device
+    is possible.
 
     Returns the response payload (includes available/current versions).
     """
-    return client.request("device/ota_update/check", payload={"id": id_}, timeout=timeout)
+    topic = "device/ota_update/check" + ("/downgrade" if downgrade else "")
+    return client.request(topic, payload={"id": id_}, timeout=timeout)
 
 
-def update(client: BridgeClient, id_: str, *, timeout: float = 600.0) -> dict:
+def update(
+    client: BridgeClient, id_: str, *, timeout: float = 600.0, downgrade: bool = False
+) -> dict:
     """Trigger an OTA update for a device.
 
+    With *downgrade* the request goes to the ``update/downgrade`` topic —
+    used after :func:`check` reported a downgrade available. z2m keeps
+    only latest / latest-1 images in its default index, so downgrade
+    support depends on the firmware source.
+
     Updates can take many minutes — default timeout is 10 minutes. Use
-    `bridge watch-events` in another shell to see progress.
+    `bridge watch-events` in another shell to see progress. A running
+    update can be backed out with :func:`abort`.
     """
-    return client.request("device/ota_update/update", payload={"id": id_}, timeout=timeout)
+    topic = "device/ota_update/update" + ("/downgrade" if downgrade else "")
+    return client.request(topic, payload={"id": id_}, timeout=timeout)
 
 
-def schedule(client: BridgeClient, id_: str, *, timeout: float = 10.0) -> dict:
-    """Schedule an OTA update (z2m runs it during the next idle window)."""
-    return client.request("device/ota_update/schedule", payload={"id": id_}, timeout=timeout)
+def abort(client: BridgeClient, id_: str, *, timeout: float = 10.0) -> dict:
+    """Abort an in-flight OTA update for a device.
+
+    An update that hangs (device went to sleep mid transfer, stalled
+    progress) has no way to back out otherwise: the request goes to
+    ``device/ota_update/update/abort`` and z2m stops the transfer.
+    Harmless when no update is running — z2m responds with an error
+    status, which the caller surfaces.
+    """
+    if not id_:
+        raise ValueError("id_ is required (friendly_name or ieee_address)")
+    return client.request("device/ota_update/update/abort", payload={"id": id_}, timeout=timeout)
+
+
+def schedule(
+    client: BridgeClient, id_: str, *, timeout: float = 10.0, downgrade: bool = False
+) -> dict:
+    """Schedule an OTA update (z2m runs it during the next idle window).
+
+    With *downgrade* the request goes to the ``schedule/downgrade`` topic,
+    scheduling a rollback instead of an upgrade.
+    """
+    topic = "device/ota_update/schedule" + ("/downgrade" if downgrade else "")
+    return client.request(topic, payload={"id": id_}, timeout=timeout)
 
 
 def unschedule(client: BridgeClient, id_: str, *, timeout: float = 10.0) -> dict:
@@ -76,11 +114,14 @@ def check_all(
     *,
     timeout: float = 30.0,
     include_disabled: bool = False,
+    downgrade: bool = False,
 ) -> list[dict]:
     """Ask every device in the network if a firmware update is available.
 
     One `device/ota_update/check` request per device (the coordinator and
-    disabled devices are skipped unless *include_disabled* is set). A device
+    disabled devices are skipped unless *include_disabled* is set). With
+    *downgrade* the sweep uses the ``check/downgrade`` topic instead, so
+    the rows report which devices can be rolled back one image. A device
     that never answers or errors out is recorded as an ``error`` row instead
     of aborting the sweep, so one unreachable battery sensor cannot hide the
     rest of the network's firmware state.
@@ -107,7 +148,9 @@ def check_all(
         update_available: Optional[bool] = None
         try:
             response = client.request(
-                "device/ota_update/check", payload={"id": id_}, timeout=timeout
+                "device/ota_update/check" + ("/downgrade" if downgrade else ""),
+                payload={"id": id_},
+                timeout=timeout,
             )
             status, detail = _classify(response)
             if status == "update_available":

@@ -4189,3 +4189,158 @@ class TestGroupLightingWorkflows:
         assert client.published == [
             ("zigbee2mqtt/kitchen-lights/set", {"color": {"r": 255, "g": 0, "b": 0}})
         ]
+
+
+# ── ota abort + downgrade (v0.11.0 refine) ───────────────────────────────────
+
+
+class _RecordingOtaClient(FakeBridgeClient):
+    """FakeBridgeClient that also records each request path it is asked for."""
+
+    def __init__(self, canned=None):
+        super().__init__()
+        self._canned = canned or {}
+        self.request_paths: list[str] = []
+
+    def request(self, path, payload=None, *, timeout=15.0):
+        self.request_paths.append(path)
+        return self._canned.get(path, {"status": "ok"})
+
+
+class _DowngradeSweepClient(_RecordingOtaClient):
+    """Sweep client keyed by device id, tolerant of the downgrade checks."""
+
+    def __init__(self, devices, per_device_responses=None):
+        super().__init__()
+        self.set_retained("zigbee2mqtt/bridge/devices", json.dumps(devices))
+        self._per_device = per_device_responses or {}
+
+    def request(self, path, payload=None, *, timeout=15.0):
+        self.request_paths.append(path)
+        if path.startswith("device/ota_update/check"):
+            return self._per_device.get(
+                payload["id"], {"status": "error", "error": "no canned response"}
+            )
+        return self._canned.get(path, {"status": "ok"})
+
+
+@patch(
+    "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+    lambda ctx: FakeBridgeClient(),
+)
+class TestOtaAbortAndDowngrade:
+    """ota abort / ota check --downgrade / update --downgrade / schedule --downgrade."""
+
+    # ── abort ────────────────────────────────────────────────────────────────
+
+    def _invoke(self, client, args, **runner_kwargs):
+        runner = _runner()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            return runner.invoke(cli, ["--mqtt-host", "x", *args], **runner_kwargs)
+
+    def test_abort_json(self):
+        client = _RecordingOtaClient()
+        result = self._invoke(client, ["--json", "ota", "abort", "Radiator"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "ok"}
+        assert client.request_paths == ["device/ota_update/update/abort"]
+
+    def test_abort_json_canned_response(self):
+        client = _RecordingOtaClient({"device/ota_update/update/abort": {"status": "ok"}})
+        result = self._invoke(client, ["--json", "ota", "abort", "lamp1"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "ok"}
+
+    def test_abort_wrong_topic_never_written(self):
+        client = _RecordingOtaClient()
+        self._invoke(client, ["--json", "ota", "abort", "lamp1"])
+        # The abort endpoint has its own topic — it must not shadow update.
+        for path in client.request_paths:
+            if path != "device/ota_update/update/abort":
+                raise AssertionError(f"unexpected request path {path!r}")
+
+    def test_abort_missing_argument(self):
+        client = _RecordingOtaClient()
+        result = self._invoke(client, ["ota", "abort"])
+        assert result.exit_code != 0
+
+    # ── downgrade flag on existing commands ─────────────────────────────────
+
+    def test_check_downgrade_hits_downgrade_topic(self):
+        client = _RecordingOtaClient()
+        result = self._invoke(client, ["--json", "ota", "check", "lamp1", "--downgrade"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "ok"}
+        assert client.request_paths == ["device/ota_update/check/downgrade"]
+
+    def test_check_without_downgrade_hits_upgrade_topic(self):
+        client = _RecordingOtaClient()
+        self._invoke(client, ["--json", "ota", "check", "lamp1"])
+        assert client.request_paths == ["device/ota_update/check"]
+
+    def test_update_downgrade_hits_downgrade_topic(self):
+        client = _RecordingOtaClient()
+        result = self._invoke(client, ["--json", "ota", "update", "lamp1", "--downgrade", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert client.request_paths == ["device/ota_update/update/downgrade"]
+
+    def test_schedule_downgrade_hits_downgrade_topic(self):
+        client = _RecordingOtaClient()
+        result = self._invoke(client, ["--json", "ota", "schedule", "lamp1", "--downgrade"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "ok"}
+        assert client.request_paths == ["device/ota_update/schedule/downgrade"]
+
+    # ── downgrade sweep ──────────────────────────────────────────────────────
+
+    def test_sweep_downgrade_uses_downgrade_topic(self):
+        devices, responses = _sweep_devices(), _sweep_responses()
+        client = _DowngradeSweepClient(devices, responses)
+        result = self._invoke(client, ["--json", "ota", "check", "--all", "--downgrade"])
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [r["friendly_name"] for r in rows] == ["lamp1", "sensor1"]
+        assert all(path.endswith("/downgrade") for path in client.request_paths)
+        assert all(path.startswith("device/ota_update/check") for path in client.request_paths)
+
+    def test_sweep_downgrade_table_summary(self):
+        client = _DowngradeSweepClient(_sweep_devices(), _sweep_responses())
+        result = self._invoke(client, ["ota", "check", "--all", "--downgrade"])
+        assert result.exit_code == 0, result.output
+        assert (
+            "checked 2: 1 update(s) available, 1 up to date, 0 not OTA-capable, 0 error(s)"
+            in result.output
+        )
+
+    # ── workflow: check downgrade → flash downgrade → abort a stuck retry ───
+
+    def test_workflow_downgrade_then_abort(self):
+        devices, responses = _sweep_devices(), _sweep_responses()
+        # key the canned check response by the NAME passed on the CLI
+        responses["lamp1"] = {"status": "ok", "data": {"update_available": True}}
+        client = _DowngradeSweepClient(devices, responses)
+        client._canned["device/ota_update/update/downgrade"] = {
+            "status": "ok",
+            "data": {"id": "lamp1"},
+        }
+        client._canned["device/ota_update/update/abort"] = {"status": "ok"}
+        result = self._invoke(client, ["--json", "ota", "check", "lamp1", "--downgrade"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["status"] == "ok"
+
+        result = self._invoke(client, ["--json", "ota", "update", "lamp1", "--downgrade", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["id"] == "lamp1"
+
+        # the transfer hangs; back it out
+        result = self._invoke(client, ["--json", "ota", "abort", "lamp1"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "ok"}
+        assert client.request_paths == [
+            "device/ota_update/check/downgrade",
+            "device/ota_update/update/downgrade",
+            "device/ota_update/update/abort",
+        ]
