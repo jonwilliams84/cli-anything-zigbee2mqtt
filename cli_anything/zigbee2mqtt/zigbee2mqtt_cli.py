@@ -1809,7 +1809,7 @@ def scene_remove_all(ctx, target, endpoint):
 
 @cli.group()
 def ota():
-    """OTA firmware update."""
+    """OTA firmware update (check / update / abort / schedule — plus --downgrade)."""
 
 
 @ota.command("check")
@@ -1834,19 +1834,27 @@ def ota():
     help="With --all: only show devices that have an update available.",
 )
 @click.option(
+    "--downgrade",
+    is_flag=True,
+    default=False,
+    help="Check the downgrade OTA index (latest-1 image) instead — is a rollback available?",
+)
+@click.option(
     "--timeout",
     default=30.0,
     type=float,
     help="Per-device response timeout in seconds (default 30).",
 )
 @click.pass_context
-def ota_check(ctx, id_or_name, check_all_flag, include_disabled, with_update, timeout):
+def ota_check(ctx, id_or_name, check_all_flag, include_disabled, with_update, downgrade, timeout):
     """Check for available OTA updates — one device, or the whole network with --all."""
     if check_all_flag:
         if id_or_name:
             _abort("cannot combine ID_OR_NAME with --all (the sweep covers every device).")
         with make_client(ctx) as c:
-            rows = ota_core.check_all(c, timeout=timeout, include_disabled=include_disabled)
+            rows = ota_core.check_all(
+                c, timeout=timeout, include_disabled=include_disabled, downgrade=downgrade
+            )
             if with_update:
                 rows = [r for r in rows if r["status"] == "update_available"]
             if not ctx.obj.get("as_json") and rows:
@@ -1868,7 +1876,7 @@ def ota_check(ctx, id_or_name, check_all_flag, include_disabled, with_update, ti
     if not id_or_name:
         _abort("give a device name or --all.")
     with make_client(ctx) as c:
-        emit(ctx, ota_core.check(c, id_or_name, timeout=timeout))
+        emit(ctx, ota_core.check(c, id_or_name, timeout=timeout, downgrade=downgrade))
 
 
 @ota.command("update")
@@ -1876,23 +1884,50 @@ def ota_check(ctx, id_or_name, check_all_flag, include_disabled, with_update, ti
 @click.option(
     "--timeout", default=600.0, type=float, help="How long to wait for completion (default 600s)."
 )
+@click.option(
+    "--downgrade",
+    is_flag=True,
+    default=False,
+    help="Flash the downgrade image instead (check --downgrade first).",
+)
 @click.confirmation_option(
     prompt="Trigger OTA update? Device may be unavailable for several minutes."
 )
 @click.pass_context
-def ota_update(ctx, id_or_name, timeout):
+def ota_update(ctx, id_or_name, timeout, downgrade):
     """Start an OTA update for a device."""
     with make_client(ctx) as c:
-        emit(ctx, ota_core.update(c, id_or_name, timeout=timeout))
+        emit(ctx, ota_core.update(c, id_or_name, timeout=timeout, downgrade=downgrade))
+
+
+@ota.command("abort")
+@click.argument("id_or_name")
+@click.option(
+    "--timeout", default=10.0, type=float, help="Response timeout in seconds (default 10)."
+)
+@click.pass_context
+def ota_abort(ctx, id_or_name, timeout):
+    """Abort an in-flight OTA update (stops a hanging or stuck transfer)."""
+    with make_client(ctx) as c:
+        try:
+            emit(ctx, ota_core.abort(c, id_or_name, timeout=timeout))
+        except (MqttError, ValueError) as exc:
+            _abort(str(exc))
 
 
 @ota.command("schedule")
 @click.argument("id_or_name")
+@click.option(
+    "--downgrade",
+    is_flag=True,
+    default=False,
+    help="Schedule a downgrade instead (runs when the device next checks in).",
+)
 @click.pass_context
-def ota_schedule(ctx, id_or_name):
+def ota_schedule(ctx, id_or_name, downgrade):
     """Schedule an OTA update for a device."""
     with make_client(ctx) as c:
-        emit(ctx, ota_core.schedule(c, id_or_name))
+        emit(ctx, ota_core.schedule(c, id_or_name, downgrade=downgrade))
 
 
 @ota.command("unschedule")

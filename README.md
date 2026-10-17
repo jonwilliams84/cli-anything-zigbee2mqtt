@@ -41,7 +41,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | `device` | `list / find / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / identify / on / off / toggle / brightness / color / color-temp / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp` — the last six are lighting groupcasts (v0.10.0) |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
-| `ota` | `check [name \| --all] / update / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware |
+| `ota` | `check [name \| --all] / update / abort / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware; `--downgrade` works on `check` / `update` / `schedule` for firmware rollback, `abort` stops a running transfer |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup` |
 | `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `list / show / add / remove` — manages `data/external_converters/*.js` via kubectl |
@@ -93,6 +93,15 @@ cli-anything-zigbee2mqtt --json ota check --all --with-update   # only pending u
 cli-anything-zigbee2mqtt ota update 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota schedule 'Radiator - Master Bedroom'
 cli-anything-zigbee2mqtt ota unschedule 'Radiator - Master Bedroom'   # back out
+
+# Firmware rollback: is a downgrade available, then flash it?
+cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom' --downgrade
+cli-anything-zigbee2mqtt --json ota check --all --downgrade     # network-wide rollback sweep
+cli-anything-zigbee2mqtt ota update 'Radiator - Master Bedroom' --downgrade
+cli-anything-zigbee2mqtt ota schedule 'balcony-temp' --downgrade  # battery device, sleeps
+
+# An update that hung mid-flash?
+cli-anything-zigbee2mqtt ota abort 'Radiator - Master Bedroom'
 
 # What can this device actually do? (local read of the retained inventory)
 cli-anything-zigbee2mqtt device exposes 'Lounge Lamp'
@@ -344,7 +353,7 @@ cli_anything/zigbee2mqtt/
 │   ├── groups.py           # group CRUD + membership + options
 │   │                       # + set_state / get_state / read_state (groupcast control)
 │   ├── scenes.py           # scene store/recall/add/remove/remove_all/rename + list
-│   ├── ota.py              # OTA check / update / schedule / unschedule
+│   ├── ota.py              # OTA check / update / abort / schedule / unschedule (+ downgrade)
 │   │                       # + check_all (whole-network firmware sweep)
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
 │   ├── converters.py       # external_converters/ file mgmt (kubectl)
@@ -374,7 +383,7 @@ filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-679 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
+1108 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
 a fake MQTT transport, every mutator in bindings / install_code / extensions /
 groups / scenes / attributes, the read-side helpers in devices.py (read_state /
 find_stale / exposes / availability_sweep / battery_sweep /

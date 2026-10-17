@@ -20,7 +20,7 @@ This is exactly the CI gate; it must exit 0 before merge.
 
 | File | What it covers |
 |---|---|
-| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit, `search_devices` inventory search, `identify` Identify-effect flash**), groups, scenes, ota (check/update/schedule/unschedule **+ `check_all` network firmware sweep**), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
+| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit, `search_devices` inventory search, `identify` Identify-effect flash**), groups, scenes, ota (check/update/**abort**/schedule/unschedule **+ `check_all` network firmware sweep incl. `--downgrade`**), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
 | `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule`, `device find --capability` → `device identify`) |
 | `test_cli_helpers.py` | CLI helper functions (`emit`, `_print_table`, `_parse_kv_fields`, …) |
 | `test_refine.py` | The v0.2.0 refine pass: bindings, generate-converter, configure-reporting, install codes, extensions, group options |
@@ -151,6 +151,25 @@ This is exactly the CI gate; it must exit 0 before merge.
   `TestGroupLightingCommands`, `TestGroupLightingWorkflows` — including
   `group add → add-member → group on → group state` and
   `scene store → group toggle` round trips).
+
+## Latest run (refine pass 10 / v0.11.0, 2026-10-17)
+
+- 1108 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`), total 98.9%
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **OTA abort + downgrade** — the last piece of z2m's
+  documented `device/ota_update/*` API the CLI did not model.
+  `ota abort <name>` stops a running transfer that hung (topic
+  `bridge/request/device/ota_update/update/abort`); `--downgrade` on
+  `ota check` / `ota check --all` / `ota update` / `ota schedule` routes
+  the request to the `/downgrade` variant of the same endpoint so the
+  downgrade OTA index is used instead of the upgrade one — network-wide
+  rollback sweeps included. Core functions `abort` in `core/ota.py` plus a
+  `downgrade` flag on `check` / `update` / `schedule` / `check_all`.
+  21 new tests: 10 unit (`test_core.py`: `TestOtaAbort`,
+  `TestOtaDowngrade`, `TestOtaCheckAllDowngrade`) and 11 E2E/workflow
+  (`test_full_e2e.py`: `TestOtaAbortAndDowngrade` — including a
+  `check --downgrade` → `update --downgrade` → `abort` round trip).
 
 ## Previous run (refine pass 7 / v0.8.0, 2026-09-27)
 

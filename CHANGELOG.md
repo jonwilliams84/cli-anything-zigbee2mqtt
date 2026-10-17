@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here.
 
+## [0.11.0] — 2026-10-17
+
+- **OTA abort + downgrade**: the last piece of z2m's documented
+  `device/ota_update/*` API the CLI did not model. Until now a hung
+  transfer (the device fell asleep mid-flash, progress stalled) had no
+  way out — you could only wait for it to time out — and rolling a device
+  back a firmware version required hand-publishing raw `mqtt publish`
+  payloads to four different topics.
+  - `ota abort <ID_OR_NAME>` — sends
+    `bridge/request/device/ota_update/update/abort` with `{"id": …}`,
+    stopping an in-flight transfer. Harmless when nothing is running.
+  - `--downgrade` on `ota check` / `ota check --all` / `ota update` /
+    `ota schedule` — routes the request to the `/downgrade` variant of
+    the same endpoint, so z2m consults the downgrade OTA index
+    (latest-1 image) instead of the upgrade one: `ota check --downgrade`
+    tells you whether a rollback exists, `ota check --all --downgrade`
+    sweeps the network for rollback candidates exactly the upgrade sweep
+    does, `ota update --downgrade` / `ota schedule --downgrade` start or
+    queue the rollback (battery devices that never answer a manual
+    request update on their next check-in).
+  - Why it matters: the default z2m OTA source stores latest and
+    latest-1 images, so a bad firmware version on a bulb or plug is
+    recoverable from the CLI without round-tripping through the
+    frontend.
+- Core functions in `core/ota.py`: new `abort()`, plus a `downgrade`
+  flag on `check()` / `update()` / `schedule()` / `check_all()` (the
+  default paths are unchanged).
+- 21 new tests (10 unit + 11 E2E/workflow); total suite 1108 passed, gate
+  green (coverage 98.9%, ruff check/format clean, bandit clean).
+
 ## [0.10.0] — 2026-10-10
 
 - **Group lighting convenience layer**: the device lighting shortcuts added in

@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state and the lighting convenience layer groupcast to rooms (group on/off/toggle/brightness/color/color-temp), Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state and the lighting convenience layer groupcast to rooms (group on/off/toggle/brightness/color/color-temp), Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), aborting a stuck transfer (ota abort) and firmware downgrade (--downgrade), permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -13,7 +13,7 @@ agent can reliably tell whether an operation succeeded.
 ## When to use
 
 - Renaming, removing, configuring, or re-interviewing a Zigbee device.
-- Triggering OTA firmware checks / updates — for one device or network-wide (`ota check --all`).
+- Triggering OTA firmware checks / updates — for one device or network-wide (`ota check --all`), including rollback (`--downgrade`) and aborting a hung transfer (`ota abort`).
 - Opening the network (`permit_join`) to add a new device or close it.
 - Reading the current device or group inventory in JSON form.
 - Finding out which properties a device accepts before writing to it
@@ -53,7 +53,7 @@ Two external deps:
 | `device` | `device list`, `device list --full`, `device show <name>`, `device find [--like lamp] [--manufacturer X] [--model M] [--vendor V] [--type Router] [--power battery] [--capability brightness] [--supported] [--disabled]` (inventory search, combinable, local read), `device rename <from> <to>`, `device remove <name> --force --block`, `device configure <name>`, `device interview <name>`, `device options <name> '{"debounce":1}'`, `device set <name> state=ON brightness=180`, `device get <name> state brightness`, `device watch <name> --duration 10`, `device identify <name> [--duration 5]` (flash the device via the Zigbee Identify cluster), `device on <name> [--transition S]`, `device off <name> [--transition S]`, `device toggle <name>`, `device brightness <name> 0-254 [--transition S]`, `device color <name> red|#ff8800|'255,136,0' [--transition S]`, `device color-temp <name> mireds [--kelvin] [--transition S]` (lighting shortcuts, values validated before any MQTT connection), `device state <name>` (one-shot retained), `device stale --threshold 60`, `device generate-converter <name> -o starter.js`, `device configure-reporting <name> --cluster genOnOff --attribute onOff --min 0 --max 300`, `device bind <from> <to> --cluster genOnOff`, `device unbind <from> <to>`, `device bindings [<name>]`, `device exposes <name> --settable`, `device endpoints <name>`, `device clusters <name> --direction input|output`, `device reportings [<name>]`, `device availability <name>`, `device availability-sweep --offline-only`, `device ping <name> [--timeout S]` (bridge round-trip liveness check, exits 1 when the device does not answer), `device read <name> --cluster genBasic --attribute zclVersion`, `device write <name> --cluster genOnOff onOff=1`, `device disable <name>`, `device enable <name>`, `device last-seen <name>` |
 | `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained), `group on/off/toggle <name> [--transition S]`, `group brightness <name> 0-254 [--transition S]`, `group color <name> red|#ff8800|'255,136,0' [--transition S]`, `group color-temp <name> mireds [--kelvin] [--transition S]` (lighting groupcasts; values validated pre-connect, unknown groups abort before publishing) |
 | `scene` | `scene list <target>`, `scene store <target> <id> --name Chill`, `scene recall <target> <id>`, `scene add <target> <id> --state ON --brightness 200 --color-temp 370 --transition 2`, `scene rename <target> <id> <name>`, `scene remove <target> <id>`, `scene remove-all <target> --yes` — TARGET is a device or group friendly_name; add `--endpoint <n>` for multi-gang devices |
-| `ota` | `ota check <name>`, `ota check --all` (network firmware sweep), `ota check --all --with-update`, `ota update <name>`, `ota schedule <name>`, `ota unschedule <name>` |
+| `ota` | `ota check <name>`, `ota check --all` (network firmware sweep), `ota check --all --with-update`, `ota check <name> --downgrade`, `ota update <name>`, `ota update <name> --downgrade`, `ota abort <name>` (stop a running transfer), `ota schedule <name> [--downgrade]`, `ota unschedule <name>` |
 | `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup` |
 | `install-code` | `install-code add <QR-text>`, `install-code remove <QR-text>` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `converter list`, `converter show <name.js>`, `converter add <name.js> ./local.js`, `converter remove <name.js>` |
@@ -161,6 +161,15 @@ device (`update_available`, `up_to_date`, `not_supported`, `unknown`,
 `error`); `--with-update` narrows to devices that actually have pending
 firmware. Chain it with `ota update` / `ota schedule <name>` on the rows you
 care about.
+
+**Rollbacks and aborts are first-class.** `ota check <name> --downgrade`
+queries the downgrade OTA index (z2m's default source keeps only
+latest / latest-1 images, so one version of rollback is available for most
+devices); `--downgrade` works on `ota update` and `ota schedule` too, and
+`ota check --all --downgrade` sweeps for rollbacks the same way it sweeps
+for upgrades. A transfer that hangs (device fell asleep mid-flash, stalled
+progress) can be stopped with `ota abort <name>` — harmless when nothing is
+running.
 
 **Permit-join auto-closes.** `permit-join on --time 60` opens for 60s then
 closes. Don't leave it open indefinitely.
