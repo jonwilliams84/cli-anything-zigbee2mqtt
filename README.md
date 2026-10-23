@@ -42,7 +42,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp` — the last six are lighting groupcasts (v0.10.0) |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check [name \| --all] / update / abort / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware; `--downgrade` works on `check` / `update` / `schedule` for firmware rollback, `abort` stops a running transfer |
-| `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup` |
+| `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup / stats` — `stats` is the one-shot fleet health summary (v0.12.0) |
 | `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `list / show / add / remove` — manages `data/external_converters/*.js` via kubectl |
 | `extension` | `list / show / save / remove` — z2m extensions (deeper than converters); managed entirely over MQTT |
@@ -135,6 +135,9 @@ cli-anything-zigbee2mqtt device write 'Lounge Lamp' --cluster genOnOff onOff=1 \
 
 # Open the network for 60 seconds (pair a new device)
 cli-anything-zigbee2mqtt network permit-join on --time 60
+
+# Whole-network health in one shot (devices, availability, battery, LQI)
+cli-anything-zigbee2mqtt --json network stats
 
 # Network map (graphviz DOT, ready for `dot -Tpng -o map.png`)
 cli-anything-zigbee2mqtt --json network map --type graphviz
@@ -302,6 +305,54 @@ cli-anything-zigbee2mqtt bridge definitions --cluster genOnOff     # attribute: 
 cli-anything-zigbee2mqtt device read plug1 --cluster genOnOff --attribute onOff --endpoint 1
 cli-anything-zigbee2mqtt device state plug1                        # the answer lands here
 ```
+
+### Network stats: one-shot fleet health (v0.12.0)
+
+`device availability-sweep`, `device stale` and `device battery` answer one
+question per device. When you want the *state of the network* — for a cron
+digest, a monitoring gate or just "is anything wrong right now?" —
+`network stats` aggregates the same sources in one pass:
+
+```bash
+cli-anything-zigbee2mqtt --json network stats
+```
+
+The report joins three things z2m already publishes:
+
+* **retained `bridge/info`** — z2m version, coordinator type + firmware,
+  permit-join state, and the network parameters (PAN id, extended PAN id,
+  channel). No retained `bridge/info` means z2m is unreachable, so the
+  command aborts with `error: no retained bridge/info — is z2m running?`
+  instead of printing a report of zeros.
+* **retained `bridge/devices`** — inventory totals: device count, count per
+  device type (Router / EndDevice / Coordinator), and how many are
+  unsupported (`supported: false`) or disabled.
+* **one `<base>/#` subscription for `--duration` seconds (default 2)** —
+  collected once, not one round trip per device: the retained
+  `<name>/availability` messages give online / offline / unknown totals, and
+  the retained `<name>` state payloads give battery health (`ok` / `low` /
+  `unknown` / `mains`, reusing `device battery`'s classifier so the two
+  commands always agree; `--below N` redefines "low", default 20%), plus
+  min / max / avg linkquality. The five weakest reported batteries appear in
+  `battery.lowest`, so the jump from summary to culprit is a single read.
+  Coordinators are skipped everywhere (they are never "offline" and hold no
+  battery).
+
+Typical dashboard-then-drill-down loop:
+
+```bash
+cli-anything-zigbee2mqtt --json network stats          # totals
+cli-anything-zigbee2mqtt --json device battery         | jq '.[] | select(.status=="low")'
+cli-anything-zigbee2mqtt --json device availability-sweep --offline-only
+```
+
+Because the numbers are computed from the same retained payloads, `stats`
+agrees with the row-level sweeps: `availability.offline` equals the number of
+offline rows in `device availability-sweep`, and `battery.low` equals the
+count of `status == "low"` rows in `device battery`. Gate scripts can check
+one number and hand off to the row-level command for detail. As everywhere
+else in this harness, `--json` emits the full report as JSON; plain mode
+prints each top-level block as `key: value` / `key: {…}` lines.
 
 ## Raw MQTT passthrough (`mqtt` group, v0.9.0)
 

@@ -1947,7 +1947,7 @@ def ota_unschedule(ctx, id_or_name):
 
 @cli.group("network")
 def network_grp():
-    """Permit-join, network map, touchlink, coordinator check, backup."""
+    """Permit-join, network map, touchlink, coordinator check, backup, stats."""
 
 
 @network_grp.command("permit-join")
@@ -2024,6 +2024,31 @@ def network_backup(ctx):
     """Backup the coordinator's network state."""
     with make_client(ctx) as c:
         emit(ctx, admin.backup(c))
+
+
+@network_grp.command("stats")
+@click.option(
+    "--duration",
+    default=2.0,
+    type=float,
+    show_default=True,
+    help="Seconds to listen for retained device state (availability/battery/LQI).",
+)
+@click.option(
+    "--below",
+    default=20.0,
+    type=float,
+    show_default=True,
+    help="Battery percent below which devices count as low.",
+)
+@click.pass_context
+def network_stats_cmd(ctx, duration, below):
+    """One-shot network health summary (devices, availability, battery, LQI)."""
+    with make_client(ctx) as c:
+        try:
+            emit(ctx, admin.network_stats(c, duration=duration, below=below))
+        except MqttError as exc:
+            _abort(str(exc))
 
 
 # ──────────────────────────────────────────────────────── converters

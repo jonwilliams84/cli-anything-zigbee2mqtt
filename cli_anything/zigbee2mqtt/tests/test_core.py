@@ -3903,3 +3903,317 @@ class TestOtaCheckAllDowngrade:
         client.set_retained("zigbee2mqtt/bridge/devices", json.dumps([self._device("lamp1")]))
         ota_core.check_all(client)
         assert paths == ["device/ota_update/check"]
+
+
+# ── network stats (v0.12.0 refine) ────────────────────────────────────────────
+
+
+class FakeBridgeClientForStats(FakeBridgeClientForBridge):
+    """FakeBridgeClientForBridge whose subscribe() replays seeded retained topics,
+    the way a real broker delivers retained messages to a fresh wildcard
+    subscription."""
+
+    def subscribe(self, filter_: str, callback) -> None:
+        prefix = filter_[:-1] if filter_.endswith("#") else filter_
+        for topic, payload in self._retained.items():
+            if filter_.endswith("#") and topic.startswith(prefix):
+                callback(topic, payload)
+            elif topic == filter_:
+                callback(topic, payload)
+
+
+class TestBridgeSummary:
+    def test_top_level_and_nested_permit_join(self):
+        from cli_anything.zigbee2mqtt.core.admin import bridge_summary
+
+        info = {
+            "version": "2.1.1",
+            "coordinator": {"type": "ConBee II", "meta": {"version": "0x2b7c29a1"}},
+            "config": {"permit_join": True},
+            "network": {"pan_id": 12345, "extended_pan_id": "0x1234", "channel": 11},
+        }
+        s = bridge_summary(info)
+        assert s["version"] == "2.1.1"
+        assert s["coordinator_type"] == "ConBee II"
+        assert s["coordinator_firmware"] == "0x2b7c29a1"
+        assert s["permit_join"] is True
+        assert s["network"]["channel"] == 11
+
+    def test_top_level_permit_join_wins(self):
+        from cli_anything.zigbee2mqtt.core.admin import bridge_summary
+
+        info = {"permit_join": False, "config": {"permit_join": True}}
+        assert bridge_summary(info)["permit_join"] is False
+
+    def test_minimal_payload_yields_nones(self):
+        from cli_anything.zigbee2mqtt.core.admin import bridge_summary
+
+        s = bridge_summary({})
+        assert s["version"] is None
+        assert s["coordinator_type"] is None
+        assert s["permit_join"] is None
+        assert s["network"] == {"pan_id": None, "extended_pan_id": None, "channel": None}
+
+    def test_non_dict_payload_is_neutralized(self):
+        from cli_anything.zigbee2mqtt.core.admin import bridge_summary
+
+        assert bridge_summary("nonsense")["version"] is None
+        assert bridge_summary(None)["version"] is None
+
+
+class TestSummarizeInventory:
+    DEVICES = [
+        {"friendly_name": "lamp", "type": "Router", "supported": True},
+        {"friendly_name": "sensor", "type": "EndDevice", "disabled": True},
+        {"friendly_name": "coord", "type": "Coordinator"},
+        {"friendly_name": "weird", "type": "Router", "supported": False},
+        {"friendly_name": "old", "supported": True, "type": "Router"},
+    ]
+
+    def test_counts_types_sorted_unsupported_disabled(self):
+        from cli_anything.zigbee2mqtt.core.admin import summarize_inventory
+
+        s = summarize_inventory(self.DEVICES)
+        assert s["total"] == 5
+        # by_type is sorted by type name so the report is stable
+        assert s["by_type"] == {"Coordinator": 1, "EndDevice": 1, "Router": 3}
+        assert s["unsupported"] == 1
+        assert s["disabled"] == 1
+
+    def test_non_dict_entries_and_missing_type_tolerated(self):
+        from cli_anything.zigbee2mqtt.core.admin import summarize_inventory
+
+        s = summarize_inventory([{"friendly_name": "x"}, "junk", 42])
+        assert s["total"] == 1
+        assert s["by_type"] == {"unknown": 1}
+
+    def test_empty_inventory(self):
+        from cli_anything.zigbee2mqtt.core.admin import summarize_inventory
+
+        assert summarize_inventory([]) == {
+            "total": 0,
+            "by_type": {},
+            "unsupported": 0,
+            "disabled": 0,
+        }
+
+
+class TestAvailabilityOverview:
+    DEVICES = [
+        {"friendly_name": "coord", "type": "Coordinator"},
+        {"friendly_name": "lamp", "ieee_address": "0x0102"},
+        {"friendly_name": "sensor"},
+    ]
+
+    def test_online_offline_unknown_split(self):
+        from cli_anything.zigbee2mqtt.core.admin import availability_overview
+
+        got = availability_overview(
+            self.DEVICES,
+            {"lamp": "online", "sensor": "offline"},
+        )
+        assert got == {"online": 1, "offline": 1, "unknown": 0}
+
+    def test_coordinator_is_never_counted(self):
+        from cli_anything.zigbee2mqtt.core.admin import availability_overview
+
+        got = availability_overview(
+            self.DEVICES, {"lamp": "online", "sensor": "online", "coord": "offline"}
+        )
+        assert got["offline"] == 0
+        assert got["online"] == 2
+
+    def test_missing_device_counts_as_unknown(self):
+        from cli_anything.zigbee2mqtt.core.admin import availability_overview
+
+        got = availability_overview(self.DEVICES, {"lamp": "online"})
+        assert got == {"online": 1, "offline": 0, "unknown": 1}
+
+    def test_ieee_address_fallback(self):
+        from cli_anything.zigbee2mqtt.core.admin import availability_overview
+
+        got = availability_overview(self.DEVICES, {"lamp": "offline"})
+        assert got["offline"] == 1
+
+
+class TestBatteryOverview:
+    DEVICES = [
+        {"friendly_name": "mains plug", "power_source": "Mains (single phase)"},
+        {"friendly_name": "sleepy sensor", "power_source": "Battery"},
+        {"friendly_name": "weak cell", "power_source": "Battery"},
+        {"friendly_name": "low flag only", "power_source": "Battery"},
+    ]
+
+    def test_counts_and_lowest_ranking(self):
+        from cli_anything.zigbee2mqtt.core.admin import battery_overview
+
+        states = {
+            "weak cell": {"battery": 7},
+            "mains plug": {"linkquality": 90},
+        }
+        got = battery_overview(self.DEVICES, states, below=20.0)
+        assert got["ok"] == 0
+        assert got["low"] == 1
+        assert got["unknown"] == 2  # sleepy sensor + low-flag-only never woke up
+        assert got["mains"] == 1  # mains plug
+        assert got["lowest"] == [{"friendly_name": "weak cell", "battery": 7.0}]
+
+    def test_low_flag_counts_without_percent(self):
+        from cli_anything.zigbee2mqtt.core.admin import battery_overview
+
+        states = {"weak cell": {"battery_low": True}, "ok one": {"battery_low": False}}
+        devices = [
+            {"friendly_name": "weak cell", "power_source": "Battery"},
+            {"friendly_name": "ok one", "power_source": "Battery"},
+            {"friendly_name": "sleepy", "power_source": "Battery"},
+        ]
+        got = battery_overview(devices, states)
+        assert got["low"] == 1
+        assert got["ok"] == 1
+        assert got["unknown"] == 1
+        # a low-battery device with no percent never appears in `lowest`
+        assert got["lowest"] == []
+
+    def test_lowest_capped_at_five_and_sorted(self):
+        from cli_anything.zigbee2mqtt.core.admin import battery_overview
+
+        devices = [
+            {"friendly_name": f"cell-{i}%", "power_source": "Battery"}
+            for i in (90, 50, 30, 18, 9, 3)
+        ]
+        states = {d["friendly_name"]: {"battery": int(d["friendly_name"][5:-1])} for d in devices}
+        got = battery_overview(devices, states, below=25.0)
+        assert got["low"] == 3
+        assert [r["friendly_name"] for r in got["lowest"]] == ["cell-3%", "cell-9%", "cell-18%"]
+
+    def test_numeric_string_battery_counts(self):
+        from cli_anything.zigbee2mqtt.core.admin import battery_overview
+
+        got = battery_overview(
+            [{"friendly_name": "cell", "power_source": "Battery"}],
+            {"cell": {"battery": "63"}},
+        )
+        assert got["ok"] == 1
+
+    def test_non_dict_state_entries_ignored(self):
+        from cli_anything.zigbee2mqtt.core.admin import battery_overview
+
+        got = battery_overview(
+            [{"friendly_name": "cell", "power_source": "Battery"}],
+            {"cell": "not-a-dict"},
+        )
+        assert got["unknown"] == 1
+
+
+class TestLinkqualityOverview:
+    def test_min_max_avg(self):
+        from cli_anything.zigbee2mqtt.core.admin import linkquality_overview
+
+        got = linkquality_overview(
+            {
+                "lamp": {"linkquality": 200},
+                "sensor": {"linkquality": 12},
+                "other": {"linkquality": "88"},
+                "junk": {"linkquality": "high"},
+                "none": {},
+            }
+        )
+        assert got == {"reported": 3, "min": 12.0, "max": 200.0, "avg": 100.0}
+
+    def test_no_reports(self):
+        from cli_anything.zigbee2mqtt.core.admin import linkquality_overview
+
+        got = linkquality_overview({"lamp": {"state": "on"}})
+        assert got == {"reported": 0, "min": None, "max": None, "avg": None}
+
+    def test_empty(self):
+        from cli_anything.zigbee2mqtt.core.admin import linkquality_overview
+
+        assert linkquality_overview({})["reported"] == 0
+
+
+class TestNetworkStats:
+    def _client(self) -> FakeBridgeClientForStats:
+        client = FakeBridgeClientForStats()
+        client.set_retained(
+            "zigbee2mqtt/bridge/info",
+            json.dumps(
+                {
+                    "version": "2.1.1",
+                    "coordinator": {"type": "ConBee II", "meta": {"version": "0x2b7c29a1"}},
+                    "config": {"permit_join": False},
+                    "network": {"channel": 11, "pan_id": 6754},
+                }
+            ),
+        )
+        client.set_retained(
+            "zigbee2mqtt/bridge/devices",
+            json.dumps(
+                [
+                    {"friendly_name": "coord", "type": "Coordinator"},
+                    {
+                        "friendly_name": "lamp",
+                        "type": "Router",
+                        "power_source": "Mains (single phase)",
+                    },
+                    {"friendly_name": "sensor", "type": "EndDevice", "power_source": "Battery"},
+                ]
+            ),
+        )
+        client.set_retained("zigbee2mqtt/lamp/availability", '{"state": "online"}')
+        client.set_retained("zigbee2mqtt/sensor/availability", "offline")
+        client.set_retained("zigbee2mqtt/lamp", '{"state":"on","linkquality":200}')
+        client.set_retained("zigbee2mqtt/sensor", '{"battery":47,"linkquality":12}')
+        return client
+
+    def test_joins_all_three_sources(self):
+        from cli_anything.zigbee2mqtt.core.admin import network_stats
+
+        report = network_stats(self._client(), duration=0)
+        assert report["bridge"]["version"] == "2.1.1"
+        assert report["bridge"]["coordinator_type"] == "ConBee II"
+        assert report["bridge"]["permit_join"] is False
+        assert report["devices"]["total"] == 3
+        assert report["devices"]["by_type"] == {"Coordinator": 1, "EndDevice": 1, "Router": 1}
+        assert report["availability"] == {"online": 1, "offline": 1, "unknown": 0}
+        assert report["battery"]["mains"] == 1
+        assert report["battery"]["ok"] == 1
+        assert report["linkquality"] == {"reported": 2, "min": 12.0, "max": 200.0, "avg": 106.0}
+        assert report["window_secs"] == 0
+
+    def test_battery_low_flag_via_join(self):
+        from cli_anything.zigbee2mqtt.core.admin import network_stats
+
+        client = self._client()
+        client.set_retained("zigbee2mqtt/sensor", '{"battery":9}')
+        report = network_stats(client, duration=0)
+        assert report["battery"]["low"] == 1
+        assert report["battery"]["lowest"] == [{"friendly_name": "sensor", "battery": 9.0}]
+
+    def test_below_threshold_moves_devices_to_low(self):
+        from cli_anything.zigbee2mqtt.core.admin import network_stats
+
+        report = network_stats(self._client(), duration=0, below=50.0)
+        assert report["battery"]["low"] == 1
+        assert report["battery"]["ok"] == 0
+
+    def test_non_device_topics_are_ignored(self):
+        from cli_anything.zigbee2mqtt.core.admin import network_stats
+
+        client = self._client()
+        client.set_retained("zigbee2mqtt/bridge/logging", '{"message":"x"}')
+        client.set_retained("zigbee2mqtt/lamp/set", '{"state":"on"}')
+        client.set_retained("zigbee2mqtt/lamp/get", "{}")
+        report = network_stats(client, duration=0)
+        # the extra topics must not leak into the state join
+        if report["devices"]["total"] != 3:
+            raise AssertionError("unexpected device count")
+        assert report["linkquality"]["reported"] == 2
+
+    def test_raises_when_no_retained_bridge_info(self):
+        from cli_anything.zigbee2mqtt.core.admin import network_stats
+        from cli_anything.zigbee2mqtt.core.mqtt_client import MqttError
+
+        client = FakeBridgeClientForStats()
+        with pytest.raises(MqttError, match="bridge/info"):
+            network_stats(client, duration=0)

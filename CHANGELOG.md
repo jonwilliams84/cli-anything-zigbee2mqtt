@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented here.
 
+## [0.12.0] — 2026-10-23
+
+- **One-shot network health report** (`network stats`): until now the only
+  way to answer "is anything wrong on the Zigbee network right now?" was to
+  run the row-level sweeps (`device availability-sweep`, `device battery`,
+  `device stale`) and tally the rows by hand — fine for humans, useless as a
+  monitoring-gate or cron digest. z2m already publishes everything needed
+  for a fleet-level answer on the retained MQTT surface.
+  - `network stats [--duration S] [--below N]` — one command, three sources
+    joined: retained `bridge/info` gives version, coordinator type + firmware,
+    permit-join state and network parameters (PAN / extended PAN / channel);
+    retained `bridge/devices` gives inventory totals (device count, count per
+    type, unsupported, disabled); and a single short `<base>/#` subscription
+    window (default 2s, not one round trip per device — the same technique the
+    sweeps use) gives online / offline / unknown availability totals, battery
+    health counts (`ok` / `low` / `unknown` / `mains`, reusing
+    `device battery`'s classifier so the two always agree; `--below N`
+    redefines "low", default 20%), min / max / avg linkquality, and the five
+    weakest reported batteries in `battery.lowest`.
+  - When no retained `bridge/info` arrives the command aborts with
+    `error: no retained bridge/info — is z2m running?` instead of emitting a
+    report of zeros — a stats tool must never lie about being unable to see.
+  - Why it matters: the z2m frontend dashboard is mouse-only and its numbers
+    were previously unreachable from scripts. `stats` makes the dashboard a
+    one-`jq`-away JSON gate, and its totals provably match the row-level
+    sweeps (same retained payloads, same classifier), so scripts can check
+    one number and hand off to the sweep for detail.
+- Core functions in `core/admin.py`: new client-free pure helpers
+  `bridge_summary()`, `summarize_inventory()`, `availability_overview()`,
+  `battery_overview()`, `linkquality_overview()`, composed by
+  `network_stats()` (raises `MqttError` on missing `bridge/info`).
+- 32 new tests (24 unit + 8 E2E/workflow, including the
+  stats-vs-sweep agreement workflow); total suite 1163 passed, gate green
+  (ruff check/format clean, bandit clean).
+
 ## [0.11.0] — 2026-10-17
 
 - **OTA abort + downgrade**: the last piece of z2m's documented

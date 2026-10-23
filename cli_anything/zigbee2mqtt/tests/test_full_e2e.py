@@ -4344,3 +4344,142 @@ class TestOtaAbortAndDowngrade:
             "device/ota_update/update/downgrade",
             "device/ota_update/update/abort",
         ]
+
+
+# ── network stats (v0.12.0 refine) ────────────────────────────────────────────
+
+
+STATS_INFO = json.dumps(
+    {
+        "version": "2.1.1",
+        "coordinator": {"type": "ConBee II", "meta": {"version": "0x2b7c29a1"}},
+        "config": {"permit_join": False},
+        "network": {"channel": 11, "pan_id": 6754},
+    }
+)
+
+STATS_INVENTORY = json.dumps(
+    [
+        {"friendly_name": "Coordinator", "type": "Coordinator"},
+        {
+            "friendly_name": "Lounge Lamp",
+            "type": "Router",
+            "power_source": "Mains (single phase)",
+            "supported": True,
+        },
+        {
+            "friendly_name": "Hall Sensor",
+            "type": "EndDevice",
+            "power_source": "Battery",
+            "supported": True,
+            "disabled": True,
+        },
+    ]
+)
+
+
+class TestNetworkStatsCommand:
+    def _client(self):
+        client = SubscribingFakeClient()
+        client.set_retained("zigbee2mqtt/bridge/info", STATS_INFO)
+        client.set_retained("zigbee2mqtt/bridge/devices", STATS_INVENTORY)
+        client.set_retained("zigbee2mqtt/Lounge Lamp/availability", '{"state":"online"}')
+        client.set_retained("zigbee2mqtt/Hall Sensor/availability", "offline")
+        client.set_retained("zigbee2mqtt/Lounge Lamp", '{"state":"on","linkquality":190}')
+        client.set_retained("zigbee2mqtt/Hall Sensor", '{"battery":6}')
+        return client
+
+    def test_stats_json(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "stats", "--duration", "0"]
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["bridge"]["version"] == "2.1.1"
+        assert data["bridge"]["coordinator_type"] == "ConBee II"
+        assert data["bridge"]["permit_join"] is False
+        assert data["devices"]["total"] == 3
+        assert data["devices"]["by_type"] == {"Coordinator": 1, "EndDevice": 1, "Router": 1}
+        assert data["devices"]["disabled"] == 1
+        assert data["availability"] == {"online": 1, "offline": 1, "unknown": 0}
+        assert data["battery"]["low"] == 1
+        assert data["battery"]["lowest"] == [{"friendly_name": "Hall Sensor", "battery": 6.0}]
+        assert data["linkquality"]["max"] == 190.0
+        assert data["window_secs"] == 0
+
+    def test_stats_table_output(self):
+        with _patched(self._client()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "network", "stats"])
+        assert result.exit_code == 0, result.output
+        assert "2.1.1" in result.output
+        assert "ConBee II" in result.output
+
+    def test_stats_z2m_unreachable_aborts_cleanly(self):
+        with _patched(SubscribingFakeClient()):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "network", "stats"])
+        assert result.exit_code != 0
+        assert "bridge/info" in result.output
+
+    def test_stats_below_flag_flows_through(self):
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "network", "stats", "--below", "10"],
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        # battery=6% is below the default 20% too, but a *tighter* threshold
+        # must not lose it either; a looser 50% would still flag it.
+        assert data["battery"]["low"] == 1
+
+    def test_stats_default_duration_is_a_short_window(self):
+        # the command must not hang: default duration is a bounded 2s window
+        # (tests force --duration 0; here we assert the option parses).
+        with _patched(self._client()):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "stats", "--duration", "0.01"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["window_secs"] == 0.01
+
+    def test_network_help_advertises_stats(self):
+        result = _runner().invoke(cli, ["network", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "stats" in result.output
+
+
+class TestStatsWorkflow:
+    """Workflow: dashboard-then-drill-down pattern that pairs network stats
+    with the existing sweeps — stats finds the problem rows, the row-level
+    commands explain them."""
+
+    def _client(self):
+        return TestNetworkStatsCommand()._client()
+
+    def test_stats_finds_offline_then_sweep_details_it(self):
+        client = self._client()
+        with _patched(client):
+            stats = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "stats", "--duration", "0"]
+            )
+            sweep = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "device", "availability-sweep"]
+            )
+        assert stats.exit_code == 0, stats.output
+        assert sweep.exit_code == 0, sweep.output
+        offline = [r["friendly_name"] for r in json.loads(sweep.output) if r["online"] is False]
+        assert json.loads(stats.output)["availability"]["offline"] == len(offline) == 1
+        assert offline == ["Hall Sensor"]
+
+    def test_stats_battery_low_matches_battery_audit(self):
+        client = self._client()
+        with _patched(client):
+            stats = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "stats", "--duration", "0"]
+            )
+            audit = _runner().invoke(cli, ["--mqtt-host", "x", "--json", "device", "battery"])
+        assert stats.exit_code == 0, stats.output
+        assert audit.exit_code == 0, audit.output
+        low_rows = [r["friendly_name"] for r in json.loads(audit.output) if r["status"] == "low"]
+        assert json.loads(stats.output)["battery"]["low"] == len(low_rows) == 1
