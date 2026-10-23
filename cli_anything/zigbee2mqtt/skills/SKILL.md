@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state and the lighting convenience layer groupcast to rooms (group on/off/toggle/brightness/color/color-temp), Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), aborting a stuck transfer (ota abort) and firmware downgrade (--downgrade), permit-join, network map, touchlink, install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state and the lighting convenience layer groupcast to rooms (group on/off/toggle/brightness/color/color-temp), Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), aborting a stuck transfer (ota abort) and firmware downgrade (--downgrade), permit-join, network map, touchlink, a one-shot fleet health summary (network stats: device/availability/battery/linkquality totals plus the weakest batteries), install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -29,6 +29,9 @@ agent can reliably tell whether an operation succeeded.
   or the validated shortcuts (`group on`, `group brightness`, `group color`…).
 - Capturing or replaying a lighting scene (`scene store` / `scene recall`).
 - Generating a network map (raw / graphviz / plantuml).
+- Asking "is anything wrong right now?" in one call — totals for devices,
+  availability, battery health and linkquality (`network stats`); drill down
+  with the row-level sweeps (`device availability-sweep`, `device battery`).
 - Pushing or removing an external converter file (e.g. to override an exposes
   block in `zigbee-herdsman-converters` without forking it).
 - Restarting the z2m process — polite via MQTT, or hard via kubectl rollout.
@@ -54,7 +57,7 @@ Two external deps:
 | `group` | `group list`, `group add <name>`, `group remove <name>`, `group rename <from> <to>`, `group add-member <group> <device>`, `group remove-member <group> <device>`, `group remove-all <group>`, `group options <name> '{"transition":1.5,"retain":true}'`, `group members <name>`, `group set <name> state=ON brightness=200 transition=2`, `group get <name> state brightness`, `group state <name>` (one-shot retained), `group on/off/toggle <name> [--transition S]`, `group brightness <name> 0-254 [--transition S]`, `group color <name> red|#ff8800|'255,136,0' [--transition S]`, `group color-temp <name> mireds [--kelvin] [--transition S]` (lighting groupcasts; values validated pre-connect, unknown groups abort before publishing) |
 | `scene` | `scene list <target>`, `scene store <target> <id> --name Chill`, `scene recall <target> <id>`, `scene add <target> <id> --state ON --brightness 200 --color-temp 370 --transition 2`, `scene rename <target> <id> <name>`, `scene remove <target> <id>`, `scene remove-all <target> --yes` — TARGET is a device or group friendly_name; add `--endpoint <n>` for multi-gang devices |
 | `ota` | `ota check <name>`, `ota check --all` (network firmware sweep), `ota check --all --with-update`, `ota check <name> --downgrade`, `ota update <name>`, `ota update <name> --downgrade`, `ota abort <name>` (stop a running transfer), `ota schedule <name> [--downgrade]`, `ota unschedule <name>` |
-| `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup` |
+| `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup`, `network stats [--duration S] [--below N]` (one-shot fleet health report) |
 | `install-code` | `install-code add <QR-text>`, `install-code remove <QR-text>` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `converter list`, `converter show <name.js>`, `converter add <name.js> ./local.js`, `converter remove <name.js>` |
 | `extension` | `extension list`, `extension show <name.js>`, `extension save <name.js> ./local.js`, `extension remove <name.js>` — z2m extensions (deeper than converters) via MQTT |
@@ -174,6 +177,14 @@ running.
 **Permit-join auto-closes.** `permit-join on --time 60` opens for 60s then
 closes. Don't leave it open indefinitely.
 
+**`network stats` aggregates the retained surface** — `bridge/info`,
+`bridge/devices` and one short `<base>/#` subscription window. It aborts with
+`no retained bridge/info — is z2m running?` when z2m is unreachable rather
+than printing zeros. Its totals are computed from the same payloads the
+row-level sweeps read, so `availability.offline` equals the offline rows of
+`device availability-sweep` and `battery.low` equals the `low` rows of
+`device battery` — gate on the report, drill down with the sweeps.
+
 **External converters override the upstream `zigbee-herdsman-converters`
 definitions.** Drop a `.js` file in z2m's `data/external_converters/` and z2m
 re-publishes MQTT discovery with whatever you've overridden. `converter add`
@@ -199,6 +210,7 @@ cli-anything-zigbee2mqtt device rename <auto-generated-name> <friendly-name>
 ### Quick health sweep
 
 ```bash
+cli-anything-zigbee2mqtt --json network stats
 cli-anything-zigbee2mqtt --json bridge info | jq '.coordinator, .restart_required, .permit_join'
 cli-anything-zigbee2mqtt --json bridge health
 cli-anything-zigbee2mqtt --json device list | jq '[.[] | select(.interview_completed==false)]'

@@ -20,8 +20,8 @@ This is exactly the CI gate; it must exit 0 before merge.
 
 | File | What it covers |
 |---|---|
-| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit, `search_devices` inventory search, `identify` Identify-effect flash**), groups, scenes, ota (check/update/**abort**/schedule/unschedule **+ `check_all` network firmware sweep incl. `--downgrade`**), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
-| `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule`, `device find --capability` → `device identify`) |
+| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit, `search_devices` inventory search, `identify` Identify-effect flash**), groups, scenes, ota (check/update/**abort**/schedule/unschedule **+ `check_all` network firmware sweep incl. `--downgrade`**), admin (**`network stats` aggregators**: `bridge_summary`/`summarize_inventory`/`availability_overview`/`battery_overview`/`linkquality_overview`/`network_stats`), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
+| `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule`, `device find --capability` → `device identify`, `network stats` totals → `device availability-sweep` / `device battery` drill-down agreement) |
 | `test_cli_helpers.py` | CLI helper functions (`emit`, `_print_table`, `_parse_kv_fields`, …) |
 | `test_refine.py` | The v0.2.0 refine pass: bindings, generate-converter, configure-reporting, install codes, extensions, group options |
 | `test_coverage_boost.py` / `test_coverage_boost2.py` | Branch coverage for watch callbacks, malformed payloads, k8s backend |
@@ -152,7 +152,35 @@ This is exactly the CI gate; it must exit 0 before merge.
   `group add → add-member → group on → group state` and
   `scene store → group toggle` round trips).
 
-## Latest run (refine pass 10 / v0.11.0, 2026-10-17)
+## Latest run (refine pass 11 / v0.12.0, 2026-10-23)
+
+- 1140 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`), total 98.41%
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **one-shot network health report** (`network stats`) —
+  the z2m frontend dashboard as a JSON gate. One command joins three
+  retained sources: `bridge/info` (version, coordinator, permit-join,
+  network parameters), `bridge/devices` (inventory totals by type +
+  unsupported/disabled counts) and a single short `<base>/#` subscription
+  window (default 2s — one wildcard subscription, not one round trip per
+  device) for availability totals, battery health counts (reusing
+  `devices.classify_battery` so `stats` and `device battery` can never
+  disagree) and min/max/avg linkquality, plus the five weakest reported
+  batteries in `battery.lowest`. Missing retained `bridge/info` aborts with
+  a clear error instead of printing a report of zeros. Core functions in
+  `core/admin.py`: client-free pure helpers `bridge_summary`,
+  `summarize_inventory`, `availability_overview`, `battery_overview`,
+  `linkquality_overview`, composed by `network_stats()`.
+  32 new tests: 24 unit (`test_core.py`: `TestBridgeSummary`,
+  `TestSummarizeInventory`, `TestAvailabilityOverview`,
+  `TestBatteryOverview`, `TestLinkqualityOverview`, `TestNetworkStats`) and
+  8 E2E/workflow (`test_full_e2e.py`: `TestNetworkStatsCommand`,
+  `TestStatsWorkflow` — including the dashboard-then-drill-down workflow
+  proving `availability.offline` equals the offline rows of
+  `device availability-sweep` and `battery.low` equals the `low` rows of
+  `device battery`).
+
+## Previous run (refine pass 10 / v0.11.0, 2026-10-17)
 
 - 1108 passed, 0 failed
 - Coverage: gate green (`--cov-fail-under=80`), total 98.9%
