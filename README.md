@@ -2,7 +2,8 @@
 
 A command-line + Python harness for [Zigbee2MQTT](https://www.zigbee2mqtt.io) —
 bridge control, device management, OTA firmware updates, network admin, group
-management, and external-converter file management. Talks to a running z2m
+management, and external-converter management (file ops via kubectl, hot-
+loading via the MQTT bridge API). Talks to a running z2m
 process over its MQTT request/response API; no frontend dependency.
 
 Sibling of [`cli-anything-homeassistant`](https://github.com/jonwilliams84/cli-anything-homeassistant)
@@ -18,9 +19,11 @@ cli-anything-zigbee2mqtt --help
 ```
 
 External deps:
-- An MQTT broker the z2m bridge already publishes to (required for every command except `converter`).
-- `kubectl` (only needed for `bridge restart --via-kubectl` and the `converter`
-  subcommand, which manage files inside the z2m container).
+- An MQTT broker the z2m bridge already publishes to (required for every command
+  except the kubectl converter paths).
+- `kubectl` (only needed for `bridge restart --via-kubectl` and the kubectl
+  paths of the `converter` group — `converter save` and the `--via-mqtt`
+  variants of `converter list / show / remove` are MQTT-only).
 
 ## First-time setup
 
@@ -44,8 +47,8 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | `ota` | `check [name \| --all] / update / abort / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware; `--downgrade` works on `check` / `update` / `schedule` for firmware rollback, `abort` stops a running transfer |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup / stats` — `stats` is the one-shot fleet health summary (v0.12.0) |
 | `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
-| `converter` | `list / show / add / remove` — manages `data/external_converters/*.js` via kubectl |
-| `extension` | `list / show / save / remove` — z2m extensions (deeper than converters); managed entirely over MQTT |
+| `converter` | `list / show / add / remove / save` — `save` pushes a converter through the MQTT bridge API (saved **and** hot-loaded, no restart, no kubectl); `list / show / remove` also have `--via-mqtt` variants against the bridge's retained inventory |
+| `extension` | `list / show / save / remove` — z2m extensions (deeper than converters); managed entirely over MQTT (same bridge API the `converter` save path uses) |
 | `config` | `show / save` (local connection profile) |
 | `mqtt` | `publish / read / watch / topics` — raw MQTT passthrough to the z2m message plane (v0.9.0) |
 | `repl` | Interactive shell (default with no subcommand) |
@@ -146,6 +149,11 @@ cli-anything-zigbee2mqtt --json network map --type graphviz
 cli-anything-zigbee2mqtt converter list
 cli-anything-zigbee2mqtt converter add my-override.js ./my-override.js
 cli-anything-zigbee2mqtt bridge restart --via-kubectl
+
+# Or push a converter straight through the bridge API: saved AND hot-loaded,
+# takes effect immediately, no restart, no kubectl (v0.13.0)
+cli-anything-zigbee2mqtt --json converter save my-override.js ./my-override.js
+cli-anything-zigbee2mqtt converter list --via-mqtt     # bridge's retained inventory
 
 # v0.2.0 refine surface
 cli-anything-zigbee2mqtt device state 'Lounge Lamp'         # one-shot retained
@@ -407,7 +415,7 @@ cli_anything/zigbee2mqtt/
 │   ├── ota.py              # OTA check / update / abort / schedule / unschedule (+ downgrade)
 │   │                       # + check_all (whole-network firmware sweep)
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
-│   ├── converters.py       # external_converters/ file mgmt (kubectl)
+│   ├── converters.py       # converters: file mgmt (kubectl) + MQTT save/remove (hot-load)
 │   ├── extensions.py       # extension save/remove/list/show (MQTT)
 │   ├── install_code.py     # install_code/add / remove
 │   ├── mqtt_raw.py         # raw MQTT passthrough (mqtt publish/read/watch/topics)
@@ -425,8 +433,13 @@ by a `transaction` id, with the response read from
 so they publish to `<base>/<target>/set` (or `<base>/<target>/<endpoint>/set`) and
 have no response topic; verify them by reading the target's retained state
 (`device state` / `group state` / `scene list`).
-File-level state (the external converters) lives in the z2m container's
-filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
+Two external-converter paths exist: file-level state lives in the z2m
+container's filesystem (`converter add` / `remove` / `list` / `show` via
+`kubectl exec` through `core/k8s_backend.py`), and the MQTT bridge path
+(`converter save` + `--via-mqtt` variants of the file commands)
+eschews kubectl entirely — z2m writes the file, imports it, and hot-loads
+the definitions immediately, publishing the resulting inventory to the
+retained `bridge/converters` topic.
 
 ## Tests
 
@@ -434,9 +447,11 @@ filesystem and is managed via `kubectl exec` through `core/k8s_backend.py`.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-1108 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
+1164 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
 a fake MQTT transport, every mutator in bindings / install_code / extensions /
-groups / scenes / attributes, the read-side helpers in devices.py (read_state /
+groups / scenes / attributes, the converter MQTT bridge path (save / list / show /
+remove with hot-load via the bridge API; list / show via the retained
+`bridge/converters` inventory), the read-side helpers in devices.py (read_state /
 find_stale / exposes / availability_sweep / battery_sweep /
 generate_external_definition / configure_reporting), the lighting
 convenience layer (on/off/toggle/brightness/color/color-temp), and

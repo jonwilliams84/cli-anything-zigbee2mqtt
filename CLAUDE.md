@@ -26,7 +26,7 @@ python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v          # full suite, no b
 cli-anything-zigbee2mqtt --help
 cli-anything-zigbee2mqtt --mqtt-host <broker> --base-topic zigbee2mqtt config save  # first-time setup
 ```
-Version is hand-bumped in `setup.py` (currently `0.12.0`) and mirrored by
+Version is hand-bumped in `setup.py` (currently `0.13.0`) and mirrored by
 `__version__` in `cli_anything/zigbee2mqtt/__init__.py` / README / SKILL docs.
 
 ## Architecture notes
@@ -34,8 +34,11 @@ Version is hand-bumped in `setup.py` (currently `0.12.0`) and mirrored by
   `zigbee2mqtt/bridge/response/<path>`, correlated by a `transaction` id — so success/failure
   is reliably detectable. Add new MQTT commands through `BridgeClient` in `mqtt_client.py`.
 - Most commands need only the MQTT broker. Two paths require `kubectl`: `bridge restart --via-kubectl`
-  and the `converter` subcommand (manages `data/external_converters/*.js` files inside the z2m
-  container via `core/k8s_backend.py`). Extensions, by contrast, are managed entirely over MQTT.
+  and the kubectl paths of the `converter` group (`add`, and `list/show/remove` without
+  `--via-mqtt`) — which manage `data/external_converters/*.js` files inside the z2m container via
+  `core/k8s_backend.py`. The converter MQTT path (`converter save` + `--via-mqtt` variants in
+  `core/converters.py`) and all extensions live on the bridge request/response API instead —
+  `converter save` hot-loads the converter immediately, no restart.
 - Device/group *cluster* commands (`device set`, `group set`, `device read`/`device write`,
   every `scene` subcommand) are NOT bridge requests: they publish to `<base>/<target>/set`
   and have no response topic, so success is only confirmed by reading retained state back
