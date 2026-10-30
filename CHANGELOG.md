@@ -2,6 +2,48 @@
 
 All notable changes to this project are documented here.
 
+## [0.13.0] — 2026-10-30
+
+- **MQTT bridge path for external converters**: the `converter` group was
+  the last mutation surface in the harness that required kubectl — z2m
+  already ships a bridge request API for exactly this job
+  (`bridge/request/converter/save {name, code}`,
+  `bridge/request/converter/remove {name}`), identical in shape to the
+  extension API the harness has used since v0.4.0. Until now a converter
+  could be uploaded to the container (`converter add`) but the definitions
+  only registered after a z2m restart, and a converter could not be managed
+  at all on an installation reachable only over MQTT.
+  - `converter save <name> <local.js>` — pushes the converter source through
+    the bridge request API: z2m writes the file, imports it and **hot-loads**
+    the definitions immediately — no restart, no kubectl. Name must end with
+    `.js` / `.mjs` / `.cjs` (z2m's rule); invalid names are rejected locally
+    before any MQTT connection.
+  - `converter list --via-mqtt` — reads the bridge's retained
+    `bridge/converters` inventory (each row: `name`, `code`, `bytes`) instead
+    of `ls`-ing the pod filesystem, so it works without kubectl.
+  - `converter show <name> --via-mqtt` — prints the source of one converter
+    from the same retained inventory; an unknown name aborts with
+    `error: no converter named …`.
+  - `converter remove <name> --via-mqtt` — deletes and hot-unloads through
+    the bridge request (z2m removes the file itself; no `.bak`). The kubectl
+    `converter add` / `remove` paths and their backup behavior are unchanged.
+  - Why it matters: an overriding converter (patching a broken exposes
+    block) goes from "upload + remember to restart + hope" to one command
+    that takes effect before the next CLI prompt, and converter management
+    now works against any z2m the broker can reach — not just pod installs
+    whose data directory kubectl can climb into.
+  - The inventory after a `save` is verified with a
+    `list --via-mqtt` / `show <name> --via-mqtt` read-back; JSON output
+    (`--json`) is gate-scriptable on every new command like the rest of the
+    harness.
+- Core functions in `core/converters.py`: new MQTT-side helpers
+  `list_mqtt()`, `show_mqtt()` (raises `KeyError` on unknown name),
+  `save_mqtt()` / `save_mqtt_from_file()` (suffix + non-empty-source
+  validation), `remove_mqtt()` — mirroring `core/extensions.py`; the
+  kubectl helpers are untouched.
+- 24 new tests (15 unit + 9 E2E/workflow); total suite 1164 passed, gate
+  green (coverage 98.4%, ruff check/format clean, bandit clean).
+
 ## [0.12.0] — 2026-10-23
 
 - **One-shot network health report** (`network stats`): until now the only

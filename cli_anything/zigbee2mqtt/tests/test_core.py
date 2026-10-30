@@ -4217,3 +4217,171 @@ class TestNetworkStats:
         client = FakeBridgeClientForStats()
         with pytest.raises(MqttError, match="bridge/info"):
             network_stats(client, duration=0)
+
+
+# ── converters: MQTT bridge path (v0.13.0) ──────────────────────────────────
+
+
+class FakeConverterBridgeClient:
+    """Fake BridgeClient for converter MQTT-path tests.
+
+    Records bridge requests (path + payload) and serves retained topics.
+    """
+
+    base_topic = "zigbee2mqtt"
+
+    def __init__(self):
+        self._retained: dict[str, str] = {}
+        self.requests: list[dict] = []
+        self._request_responses: dict[str, dict] = {}
+
+    def set_retained(self, topic: str, payload: str) -> None:
+        self._retained[topic] = payload
+
+    def set_response(self, path: str, response: dict) -> None:
+        self._request_responses[path] = response
+
+    def collect_retained(self, topic: str, *, timeout: float = 5.0) -> str | None:
+        return self._retained.get(topic)
+
+    def request(self, path: str, payload=None, *, timeout: float = 15.0) -> dict:
+        self.requests.append({"path": path, "payload": payload})
+        return self._request_responses.get(path, {"status": "ok"})
+
+
+class TestConverterMqttSave:
+    def test_save_publishes_name_and_code(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        result = converters_core.save_mqtt(client, name="diy.js", code="export default {...}")
+        req = client.requests[0]
+        if req["path"] != "converter/save":
+            raise ValueError(f"expected path converter/save, got {req['path']!r}")
+        if req["payload"]["name"] != "diy.js":
+            raise ValueError("payload must carry the converter name")
+        if req["payload"]["code"] != "export default {...}":
+            raise ValueError("payload must carry the converter source")
+        assert result["status"] == "ok"
+
+    def test_save_accepts_mjs_and_cjs_suffixes(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        for suffix in (".js", ".mjs", ".cjs"):
+            client = FakeConverterBridgeClient()
+            converters_core.save_mqtt(client, name=f"diy{suffix}", code="x")
+            assert client.requests[0]["path"] == "converter/save"
+
+    def test_save_rejects_non_js_name(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        with pytest.raises(ValueError, match=r"\.js, \.mjs or \.cjs"):
+            converters_core.save_mqtt(client, name="diy", code="x")
+        assert client.requests == []
+
+    def test_save_rejects_empty_name_and_code(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        with pytest.raises(ValueError):
+            converters_core.save_mqtt(client, name="", code="x")
+        with pytest.raises(ValueError):
+            converters_core.save_mqtt(client, name="diy.js", code="")
+        assert client.requests == []
+
+    def test_save_from_file_reads_local_source(self, tmp_path):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        src = tmp_path / "diy.js"
+        src.write_text("export default {zigbeeModel: []}\n", encoding="utf-8")
+        client = FakeConverterBridgeClient()
+        converters_core.save_mqtt_from_file(client, name="diy.js", local_path=str(src))
+        assert client.requests[0]["payload"]["code"].startswith("export default")
+
+
+class TestConverterMqttListShow:
+    def test_list_mqtt_empty_when_no_retained(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        assert converters_core.list_mqtt(FakeConverterBridgeClient()) == []
+
+    def test_list_mqtt_parses_inventory_and_byte_counts(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        client.set_retained(
+            "zigbee2mqtt/bridge/converters",
+            json.dumps(
+                [
+                    {"name": "diy.js", "code": "export default {}"},
+                    {"name": "other.mjs", "code": "x,y"},
+                ]
+            ),
+        )
+        rows = converters_core.list_mqtt(client)
+        names = [r["name"] for r in rows]
+        if names != ["diy.js", "other.mjs"]:
+            raise ValueError(f"unexpected converter rows: {names!r}")
+        assert rows[0]["bytes"] == len("export default {}".encode())
+
+    def test_list_mqtt_ignores_non_dict_rows(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        client.set_retained(
+            "zigbee2mqtt/bridge/converters",
+            json.dumps(["not-a-dict", {"code": "orphan"}]),
+        )
+        assert converters_core.list_mqtt(client) == []
+
+    def test_list_mqtt_returns_empty_on_non_json_payload(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/converters", "[not-json")
+        assert converters_core.list_mqtt(client) == []
+
+    def test_list_mqtt_returns_empty_on_non_list_payload(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/converters", '{"name": "diy.js"}')
+        assert converters_core.list_mqtt(client) == []
+
+    def test_show_mqtt_returns_source_code(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        client.set_retained(
+            "zigbee2mqtt/bridge/converters", '[{"name": "diy.js", "code": "// body"}]'
+        )
+        assert converters_core.show_mqtt(client, "diy.js") == "// body"
+
+    def test_show_mqtt_unknown_name_raises(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        with pytest.raises(KeyError, match="no converter named"):
+            converters_core.show_mqtt(FakeConverterBridgeClient(), "missing.js")
+
+    def test_show_mqtt_rejects_empty_name(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        with pytest.raises(ValueError):
+            converters_core.show_mqtt(FakeConverterBridgeClient(), "")
+
+
+class TestConverterMqttRemove:
+    def test_remove_publishes_name(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        client = FakeConverterBridgeClient()
+        converters_core.remove_mqtt(client, "diy.js")
+        assert client.requests[0]["path"] == "converter/remove"
+        assert client.requests[0]["payload"] == {"name": "diy.js"}
+
+    def test_remove_rejects_empty_name(self):
+        from cli_anything.zigbee2mqtt.core import converters as converters_core
+
+        with pytest.raises(ValueError):
+            converters_core.remove_mqtt(FakeConverterBridgeClient(), "")

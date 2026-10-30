@@ -2056,24 +2056,69 @@ def network_stats_cmd(ctx, duration, below):
 
 @cli.group()
 def converter():
-    """Manage z2m's external_converters/ (.js files via kubectl exec)."""
+    """Manage z2m's external converters — file ops via kubectl, save/remove via MQTT."""
 
 
 @converter.command("list")
+@click.option(
+    "--via-mqtt",
+    is_flag=True,
+    default=False,
+    help="List from the bridge's retained converter inventory (no kubectl).",
+)
 @click.pass_context
-def converter_list(ctx):
+def converter_list(ctx, via_mqtt):
     """List all external converters."""
-    target = make_k8s_target(ctx)
-    emit(ctx, converters_core.list_converters(target))
+    if via_mqtt:
+        with make_client(ctx) as c:
+            emit(ctx, converters_core.list_mqtt(c))
+    else:
+        target = make_k8s_target(ctx)
+        emit(ctx, converters_core.list_converters(target))
 
 
 @converter.command("show")
 @click.argument("name")
+@click.option(
+    "--via-mqtt",
+    is_flag=True,
+    default=False,
+    help="Read the code from the bridge's retained converter inventory (no kubectl).",
+)
 @click.pass_context
-def converter_show(ctx, name):
+def converter_show(ctx, name, via_mqtt):
     """Show the content of an external converter."""
-    target = make_k8s_target(ctx)
-    click.echo(converters_core.show(target, name))
+    if via_mqtt:
+        with make_client(ctx) as c:
+            try:
+                click.echo(converters_core.show_mqtt(c, name))
+            except KeyError as exc:
+                _abort(str(exc))
+    else:
+        target = make_k8s_target(ctx)
+        click.echo(converters_core.show(target, name))
+
+
+@converter.command("save")
+@click.argument("name")
+@click.argument("local_path", type=click.Path(exists=True, dir_okay=False))
+@click.pass_context
+def converter_save(ctx, name, local_path):
+    """Push a converter through the MQTT bridge API — saved AND hot-loaded.
+
+    Unlike `converter add` (which only writes the file into the container and
+    needs a z2m restart), z2m imports the module and registers the converted
+    definitions immediately. No kubectl needed. NAME must end with
+    .js / .mjs / .cjs.
+    """
+    with make_client(ctx) as c:
+        try:
+            emit(
+                ctx,
+                converters_core.save_mqtt_from_file(c, name=name, local_path=local_path),
+            )
+        except ValueError as exc:
+            _abort(str(exc))
 
 
 @converter.command("add")
@@ -2097,13 +2142,26 @@ def converter_add(ctx, name, local_path, no_backup):
 
 @converter.command("remove")
 @click.argument("name")
+@click.option(
+    "--via-mqtt",
+    is_flag=True,
+    default=False,
+    help="Remove through the bridge request API (hot-unloads the converter, no kubectl).",
+)
 @click.option("--no-backup", is_flag=True)
 @click.confirmation_option(prompt="Remove this external converter file?")
 @click.pass_context
-def converter_remove(ctx, name, no_backup):
+def converter_remove(ctx, name, via_mqtt, no_backup):
     """Remove an external converter."""
-    target = make_k8s_target(ctx)
-    emit(ctx, converters_core.remove(target, name, backup=not no_backup))
+    if via_mqtt:
+        with make_client(ctx) as c:
+            try:
+                emit(ctx, converters_core.remove_mqtt(c, name))
+            except ValueError as exc:
+                _abort(str(exc))
+    else:
+        target = make_k8s_target(ctx)
+        emit(ctx, converters_core.remove(target, name, backup=not no_backup))
 
 
 # ──────────────────────────────────────────────────────── install codes

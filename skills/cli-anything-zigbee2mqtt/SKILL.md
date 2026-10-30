@@ -1,6 +1,6 @@
 ---
 name: cli-anything-zigbee2mqtt
-description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state and the lighting convenience layer groupcast to rooms (group on/off/toggle/brightness/color/color-temp), Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), aborting a stuck transfer (ota abort) and firmware downgrade (--downgrade), permit-join, network map, touchlink, a one-shot fleet health summary (network stats: device/availability/battery/linkquality totals plus the weakest batteries), install-code pre-registration for join-protected devices, and external converter + extension file management. Talks to a running z2m process over its MQTT request/response API.
+description: CLI harness for Zigbee2MQTT — bridge control, device list/rename/remove/configure/interview, exposes introspection, endpoint/cluster and configured-reporting introspection, the bridge cluster dictionary (bridge definitions), availability checks and offline sweeps, device ping liveness round trip, raw ZCL cluster attribute read/write, direct bind/unbind + bindings inspection, last-seen staleness sweeps, inventory search by name/model/vendor/power/exposes capability (device find), Identify-effect flash to locate a device physically (device identify), retained-state one-shot reads, generate starter external converters from interview data, manual attribute reporting setup, group management with options plus groupcast set/get/state and the lighting convenience layer groupcast to rooms (group on/off/toggle/brightness/color/color-temp), Zigbee scene store/recall/add/rename/remove on devices or groups, OTA firmware updates including a whole-network firmware sweep (ota check --all), aborting a stuck transfer (ota abort) and firmware downgrade (--downgrade), permit-join, network map, touchlink, a one-shot fleet health summary (network stats: device/availability/battery/linkquality totals plus the weakest batteries), install-code pre-registration for join-protected devices, external converters (file ops via kubectl plus a full MQTT bridge path — converter save hot-loads without a restart), and extension file management. Talks to a running z2m process over its MQTT request/response API.
 ---
 
 # cli-anything-zigbee2mqtt
@@ -32,8 +32,10 @@ agent can reliably tell whether an operation succeeded.
 - Asking "is anything wrong right now?" in one call — totals for devices,
   availability, battery health and linkquality (`network stats`); drill down
   with the row-level sweeps (`device availability-sweep`, `device battery`).
-- Pushing or removing an external converter file (e.g. to override an exposes
-  block in `zigbee-herdsman-converters` without forking it).
+- Pushing, hot-loading or removing an external converter (e.g. to override an
+  exposes block in `zigbee-herdsman-converters` without forking it), with or
+  without kubectl: `converter save` goes through the MQTT bridge API and takes
+  effect immediately.
 - Restarting the z2m process — polite via MQTT, or hard via kubectl rollout.
 
 ## Install
@@ -46,7 +48,8 @@ cli-anything-zigbee2mqtt --mqtt-host <broker> --base-topic zigbee2mqtt config sa
 Two external deps:
 1. MQTT broker the z2m bridge already talks to.
 2. `kubectl` is only required for `bridge restart --via-kubectl` and the
-   `converter` subcommand. The MQTT-only commands work without it.
+   kubectl paths of the `converter` group. `converter save` and the
+   `--via-mqtt` variants of `converter list / show / remove` are MQTT-only.
 
 ## Command groups
 
@@ -59,7 +62,7 @@ Two external deps:
 | `ota` | `ota check <name>`, `ota check --all` (network firmware sweep), `ota check --all --with-update`, `ota check <name> --downgrade`, `ota update <name>`, `ota update <name> --downgrade`, `ota abort <name>` (stop a running transfer), `ota schedule <name> [--downgrade]`, `ota unschedule <name>` |
 | `network` | `network permit-join on --time 60`, `network permit-join off`, `network map --type graphviz`, `network touchlink-scan`, `network coordinator-check`, `network backup`, `network stats [--duration S] [--below N]` (one-shot fleet health report) |
 | `install-code` | `install-code add <QR-text>`, `install-code remove <QR-text>` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
-| `converter` | `converter list`, `converter show <name.js>`, `converter add <name.js> ./local.js`, `converter remove <name.js>` |
+| `converter` | `converter list`, `converter list --via-mqtt` (retained bridge inventory), `converter show <name.js>`, `converter show <name.js> --via-mqtt`, `converter add <name.js> ./local.js` (kubectl file upload), `converter save <name.js> ./local.js` (MQTT bridge API — saved AND hot-loaded, no restart / kubectl), `converter remove <name.js>`, `converter remove <name.js> --via-mqtt` (hot-unload) |
 | `extension` | `extension list`, `extension show <name.js>`, `extension save <name.js> ./local.js`, `extension remove <name.js>` — z2m extensions (deeper than converters) via MQTT |
 | `config` | `config show`, `config save` |
 | `repl` | Interactive shell (default with no subcommand) |
@@ -189,6 +192,13 @@ row-level sweeps read, so `availability.offline` equals the offline rows of
 definitions.** Drop a `.js` file in z2m's `data/external_converters/` and z2m
 re-publishes MQTT discovery with whatever you've overridden. `converter add`
 leaves a timestamped `.bak` next to the existing file (if any) for rollback.
+Two delivery paths share one command group: `converter add` writes the file
+(kubectl) and it auto-loads on next z2m start, while `converter save` pushes
+the source through the MQTT bridge request API — z2m writes the file, imports
+it and hot-loads the definitions immediately, then re-publishes the
+inventory on the retained `bridge/converters` topic (`converter list
+--via-mqtt` / `converter show NAME --via-mqtt` read it back; `converter
+remove --via-mqtt` hot-unloads).
 
 **Restart timing**: a polite `bridge restart` takes ~10-30s while z2m flushes
 state and reconnects to the coordinator. The hard variant via `--via-kubectl`
@@ -231,10 +241,9 @@ cli-anything-zigbee2mqtt ota schedule 'balcony-temp'   # battery device, sleeps
 ### Patch a device's exposes (the way we fixed Tuya ZY-M100-24GV3 sensitivity)
 
 ```bash
-# Author the .js file locally based on the upstream definition,
-# then push and restart z2m so it auto-loads.
-cli-anything-zigbee2mqtt converter add zy-m100-fix.js ./zy-m100-fix.js
-cli-anything-zigbee2mqtt bridge restart --via-kubectl
+# Author the .js file locally based on the upstream definition, then push it
+# through the bridge API — hot-loaded immediately, no restart (or no kubectl):
+cli-anything-zigbee2mqtt converter save zy-m100-fix.js ./zy-m100-fix.js
 # Verify the overridden discovery is published:
 cli-anything-zigbee2mqtt --json device show <name> | jq '.definition.exposes'
 ```
@@ -246,9 +255,8 @@ cli-anything-zigbee2mqtt --json device show <name> | jq '.definition.exposes'
 cli-anything-zigbee2mqtt network permit-join on --time 120
 # After pairing, ask z2m to write a starter converter from the interview data:
 cli-anything-zigbee2mqtt device generate-converter <auto-name> -o new-device.js
-# Edit new-device.js, then push it:
-cli-anything-zigbee2mqtt converter add new-device.js ./new-device.js
-cli-anything-zigbee2mqtt bridge restart
+# Edit new-device.js, then push + hot-load it in one step:
+cli-anything-zigbee2mqtt converter save new-device.js ./new-device.js
 ```
 
 ### Direct device-to-device binding (sub-100ms switch → light)

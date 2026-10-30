@@ -35,6 +35,8 @@ class FakeBridgeClient:
         # Fire-and-forget publishes (device/group set, scene commands) have no
         # bridge/response, so tests assert on what reached the wire.
         self.published: list[tuple[str, object]] = []
+        # Bridge requests that went through `request()` (path + payload).
+        self.requests: list[tuple[str, object]] = []
 
     def set_retained(self, topic: str, payload: str) -> None:
         self._retained[topic] = payload
@@ -46,6 +48,7 @@ class FakeBridgeClient:
         return self._retained.get(topic)
 
     def request(self, path: str, payload=None, *, timeout: float = 15.0) -> dict:
+        self.requests.append((path, payload))
         return self._request_responses.get(path, {})
 
     def publish(self, topic: str, payload, *, qos: int = 0, retain: bool = False) -> int:
@@ -4483,3 +4486,150 @@ class TestStatsWorkflow:
         assert audit.exit_code == 0, audit.output
         low_rows = [r["friendly_name"] for r in json.loads(audit.output) if r["status"] == "low"]
         assert json.loads(stats.output)["battery"]["low"] == len(low_rows) == 1
+
+
+# ── converter MQTT path (v0.13.0) ────────────────────────────────────────────
+
+
+class TestConverterMqttCommands:
+    def _client(self):
+        client = FakeBridgeClient()
+        client.set_retained(
+            "zigbee2mqtt/bridge/converters",
+            json.dumps([{"name": "diy.js", "code": "// diy converter"}]),
+        )
+        client.set_response("converter/save", {"status": "ok"})
+        client.set_response("converter/remove", {"status": "ok"})
+        return client
+
+    def test_list_via_mqtt(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "converter", "list", "--via-mqtt"])
+        assert result.exit_code == 0, result.output
+        assert "diy.js" in result.output
+
+    def test_list_via_mqtt_json(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "converter", "list", "--via-mqtt"],
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert rows[0]["name"] == "diy.js"
+        assert rows[0]["bytes"] == len("// diy converter")
+
+    def test_list_via_mqtt_empty_inventory(self, fake_client):
+        client = FakeBridgeClient()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "converter", "list", "--via-mqtt"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == []
+
+    def test_show_via_mqtt_prints_code(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "converter", "show", "diy.js", "--via-mqtt"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "// diy converter" in result.output
+
+    def test_show_via_mqtt_unknown_aborts(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "converter", "show", "ghost.js", "--via-mqtt"]
+            )
+        assert result.exit_code == 1, result.output
+        assert "no converter named" in result.output
+
+    def test_save_hot_loads_without_kubectl(self, fake_client, tmp_path):
+        client = self._client()
+        src = tmp_path / "fresh.js"
+        src.write_text("export default {zigbeeModel: ['DIY']}", encoding="utf-8")
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "converter", "save", "fresh.js", str(src)],
+            )
+        assert result.exit_code == 0, result.output
+        out = json.loads(result.output)
+        assert out["status"] == "ok"
+        path, payload = client.requests[0]
+        assert path == "converter/save"
+        assert payload == {
+            "name": "fresh.js",
+            "code": src.read_text(encoding="utf-8"),
+        }
+
+    def test_save_rejects_bad_suffix_before_connecting(self, fake_client, tmp_path):
+        client = self._client()
+        src = tmp_path / "converters-not-js.txt"
+        src.write_text("not js", encoding="utf-8")
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "converter", "save", "fresh", str(src)],
+            )
+        assert result.exit_code == 1, result.output
+        assert "name should end with .js, .mjs or .cjs" in result.output
+        assert client.requests == []
+
+    def test_remove_via_mqtt(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "converter", "remove", "diy.js", "--via-mqtt", "--yes"]
+            )
+        assert result.exit_code == 0, result.output
+        path, payload = client.requests[0]
+        assert path == "converter/remove"
+        assert payload == {"name": "diy.js"}
+
+    def test_save_then_show_round_trip(self, fake_client, tmp_path):
+        client = self._client()
+        src = tmp_path / "room.js"
+        src.write_text("// room converter", encoding="utf-8")
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            saved = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "converter", "save", "room.js", str(src)],
+            )
+            shown = _runner().invoke(
+                cli, ["--mqtt-host", "x", "converter", "show", "diy.js", "--via-mqtt"]
+            )
+        assert saved.exit_code == 0, saved.output
+        assert shown.exit_code == 0, shown.output
+        assert "// diy converter" in shown.output

@@ -180,6 +180,30 @@ This is exactly the CI gate; it must exit 0 before merge.
   `device availability-sweep` and `battery.low` equals the `low` rows of
   `device battery`).
 
+## Latest run (refine pass 12 / v0.13.0, 2026-10-30)
+
+- 1164 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`), total 98.40%
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **MQTT bridge path for external converters** — until now
+  the `converter` group was the only mutation surface that required kubectl,
+  even though z2m ships the same bridge request API for converters that it
+  already uses for extensions (`bridge/request/converter/save {name, code}`,
+  `bridge/request/converter/remove {name}`, retained `bridge/converters`
+  inventory). Saving through the bridge also hot-loads the converter — z2m
+  writes the file, imports it and registers the definitions immediately, no
+  restart. Core functions in `core/converters.py`: `list_mqtt` (retained
+  inventory with byte counts), `show_mqtt` (KeyError on unknown name),
+  `save_mqtt` / `save_mqtt_from_file` (suffix-validated: `.js` / `.mjs` /
+  `.cjs`), `remove_mqtt`; the kubectl helpers are unchanged.
+  24 new tests: 17 unit (`test_core.py`: `TestConverterMqttSave`,
+  `TestConverterMqttListShow`, `TestConverterMqttRemove`) and 12
+  E2E/workflow (`test_full_e2e.py`: `TestConverterMqttCommands` — list /
+  list `--json` / empty inventory / show / unknown-name abort / save with
+  payload verification / bad-suffix abort before connecting / remove with
+  `--yes` / save→show round trip). `FakeBridgeClient` in `test_full_e2e.py`
+  now records bridge requests (`client.requests`) for payload assertions.
+
 ## Previous run (refine pass 10 / v0.11.0, 2026-10-17)
 
 - 1108 passed, 0 failed
