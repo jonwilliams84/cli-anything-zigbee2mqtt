@@ -2,6 +2,42 @@
 
 All notable changes to this project are documented here.
 
+## [0.14.0] — 2026-11-08
+
+- **Raw bridge-request escape hatch (`bridge request`)**: the harness's typed
+  command groups wrapped every bridge request/response endpoint z2m exposed
+  when this version was built — but z2m's bridge API grows every release, and
+  a z2m **extension** can register its own `bridge/request/...` endpoints at
+  runtime. Until now, reaching any of those meant hand-crafting an
+  `mqtt publish` at `bridge/request/<path>` and getting nothing back: no
+  correlated response, no `status: error` detection, no timeout, no
+  transaction id.
+  - `bridge request <path> [-F key=value ...] [--data JSON] [--data-file FILE|-]
+    [--timeout S] [--json]` — sends *any* bridge request through the same
+    `BridgeClient` request/response machinery the typed commands ride:
+    transaction-id correlation is added automatically, z2m's
+    `status: error` responses abort with `error: ...` (exit 1), and JSON
+    output (`--json`) is gate-scriptable like every other command.
+  - Payload sources (exactly one): repeatable `-F key=value` fields (values
+    are JSON-decoded — `value=true` is a bool, `time=60` an int), `--data
+    '{...}'` for an inline JSON object, `--data-file payload.json` (`-` reads
+    stdin), or nothing for an empty object. Combining sources is rejected
+    locally, before any broker connection.
+  - Path normalization: `permit_join`, `bridge/request/permit_join` and
+    `zigbee2mqtt/bridge/request/permit_join` all mean the same request.
+  - Why it matters: a new z2m bridge endpoint is reachable from the CLI the
+    day z2m ships it (no harness release needed), extension-registered
+    endpoints work at all, and the remaining documented endpoint the typed
+    groups never modeled (`group/simulate/recall`, etc.) is one command away.
+  - Validation (empty path, non-object payload, malformed JSON, missing
+    `--data-file`) happens before any MQTT connection, following the
+    harness's fail-fast convention.
+- Core functions in `core/bridge.py`: `normalize_request_path` and
+  `raw_request` — both client-free for the validation part, delegating
+  transport to `BridgeClient.request`; no existing bridge code paths changed.
+- 26 new tests (13 unit + 13 E2E/workflow); total suite 1190 passed, gate
+  green (coverage 98.25%, ruff check/format clean, bandit clean).
+
 ## [0.13.0] — 2026-10-30
 
 - **MQTT bridge path for external converters**: the `converter` group was

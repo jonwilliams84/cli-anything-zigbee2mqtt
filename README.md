@@ -40,7 +40,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 
 | Group | Examples |
 |---|---|
-| `bridge` | `info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging` |
+| `bridge` | `info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging` — plus `request PATH` (v0.14.0), the escape hatch that sends *any* bridge request (documented or future z2m API, extension-registered endpoints) with full request/response correlation |
 | `device` | `list / find / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / identify / on / off / toggle / brightness / color / color-temp / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp` — the last six are lighting groupcasts (v0.10.0) |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
@@ -361,6 +361,38 @@ count of `status == "low"` rows in `device battery`. Gate scripts can check
 one number and hand off to the row-level command for detail. As everywhere
 else in this harness, `--json` emits the full report as JSON; plain mode
 prints each top-level block as `key: value` / `key: {…}` lines.
+
+### Raw bridge requests: the escape hatch (v0.14.0)
+
+The typed groups above wrap every bridge request/response endpoint z2m exposed
+when the harness was built — but z2m's bridge API grows every release, and a
+z2m **extension** can register its own `bridge/request/...` endpoints at
+runtime. `mqtt publish` can fire at those topics, but it gets nothing back:
+no correlated response, no error-status detection. `bridge request` closes
+that gap — it sends *any* request through the same `BridgeClient`
+request/response machinery as the typed commands, so you get the transaction
+id correlation, the 15s timeout, and the same `error: ...` abort on
+`status: error` responses:
+
+```bash
+# a documented endpoint this harness never modeled:
+cli-anything-zigbee2mqtt --json bridge request group/simulate/recall -F id=3 -F scene_id=1
+
+# a custom endpoint registered by an extension:
+cli-anything-zigbee2mqtt bridge request my_extension/do_thing -F value=1
+
+# future z2m API, day one — no harness release needed:
+cli-anything-zigbee2mqtt bridge request device/reset -F id='Lamp' -F force=true
+```
+
+Payload sources (choose one): repeatable `-F key=value` fields (values are
+JSON-decoded, so `value=true` is a bool and `time=60` is an int), `--data
+'{...}'` for a JSON object on the command line, or `--data-file payload.json`
+(`-` reads stdin). An omitted payload sends an empty object. The path accepts
+any form — bare (`permit_join`), prefixed (`bridge/request/permit_join`) or
+fully qualified (`zigbee2mqtt/bridge/request/permit_join`) — and is normalized
+before it hits the wire. Validation (payload-source conflicts, bad JSON,
+missing path) happens locally, before any MQTT connection is opened.
 
 ## Raw MQTT passthrough (`mqtt` group, v0.9.0)
 

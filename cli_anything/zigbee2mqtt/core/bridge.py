@@ -54,6 +54,65 @@ def options_set(client: BridgeClient, options: dict, *, timeout: float = 10.0) -
     return client.request("options", payload={"options": options}, timeout=timeout)
 
 
+# ── raw bridge requests (escape hatch for unmodelled endpoints) ─────────────
+
+
+def normalize_request_path(path: str) -> str:
+    """Normalize a bridge request path to the form z2m expects.
+
+    Accepts ``permit_join``, ``/permit_join/``, ``bridge/request/permit_join``
+    (and, for convenience, the fully-qualified ``<base>/bridge/request/...``
+    form) and returns the bare request path, e.g. ``permit_join``. Raises
+    ``ValueError`` for an empty or whitespace-only path.
+    """
+    cleaned = (path or "").strip().lstrip("/")
+    prefix = "bridge/request/"
+    if cleaned.startswith(prefix):
+        cleaned = cleaned[len(prefix) :]
+    elif "/" in cleaned and "/bridge/request/" in f"/{cleaned}":
+        # fully-qualified "<base>/bridge/request/<path>" form
+        head, _, tail = cleaned.partition("/bridge/request/")
+        if tail:
+            cleaned = tail
+        elif head:
+            cleaned = head
+    if cleaned == "bridge/request":
+        # the bare prefix alone means "no endpoint was given"
+        cleaned = ""
+    cleaned = cleaned.strip("/")
+    if not cleaned:
+        raise ValueError(
+            "bridge request path is required "
+            "(e.g. permit_join, device/set, or bridge/request/<path>)"
+        )
+    return cleaned
+
+
+def raw_request(
+    client: BridgeClient,
+    path: str,
+    payload: Optional[dict] = None,
+    *,
+    timeout: float = 15.0,
+) -> dict:
+    """Send an arbitrary bridge request and return z2m's correlated response.
+
+    This is the escape hatch for every request/response endpoint the typed
+    command groups don't model — documented or not, current or future, plus
+    any custom `bridge/request/...` endpoint a z2m extension registers.
+    Requests are sent with a transaction id (added by
+    :meth:`BridgeClient.request`), so success/failure is reliably detected:
+    a ``status: error`` response raises :class:`MqttError` there.
+
+    ``path`` is normalized with :func:`normalize_request_path`; ``payload``
+    must be a dict (or None, which z2m sees as ``{"transaction": ...}``).
+    """
+    clean = normalize_request_path(path)
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object (dict) or None")
+    return client.request(clean, payload=payload, timeout=timeout)
+
+
 def watch_logging(
     client: BridgeClient,
     *,
