@@ -475,6 +475,70 @@ def bridge_definitions(ctx, cluster, commands, custom, timeout):
     emit(ctx, bridge_core.summarize_clusters(defs))
 
 
+@bridge.command("request")
+@click.argument("path")
+@click.option(
+    "--data",
+    "data_raw",
+    default=None,
+    help="Request payload as a JSON object string, e.g. '{\"value\": true}'.",
+)
+@click.option(
+    "-F",
+    "fields",
+    multiple=True,
+    help="Request payload field as key=value (repeatable; values are JSON-decoded when possible).",
+)
+@click.option(
+    "--data-file",
+    default=None,
+    type=str,
+    help="Read the JSON object payload from a file ('-' for stdin).",
+)
+@click.option(
+    "--timeout",
+    default=15.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for the bridge response.",
+)
+@click.pass_context
+def bridge_request(ctx, path, data_raw, fields, data_file, timeout):
+    """Send ANY bridge request and wait for the correlated response.
+
+    Escape hatch for request/response endpoints the typed commands don't
+    model — current or future z2m bridge API, or custom endpoints registered
+    by z2m extensions. PATH is the bare request path (e.g. `permit_join`,
+    `group/simulate/recall`); a `bridge/request/` prefix (with or without
+    the base topic) is stripped, so any form works.
+
+    Payload sources: -F key=value pairs, --data JSON object, --data-file
+    (file or '-'), or none for an empty object. A transaction id is added
+    automatically and z2m's `status: error` responses abort with the error.
+    """
+    if fields and (data_raw or data_file):
+        _abort("use either -F key=value fields or --data/--data-file, not both")
+    payload: dict = {}
+    if data_raw is not None:
+        payload = _parse_json_obj(data_raw, "--data")
+    elif data_file is not None:
+        if data_file == "-":
+            raw = click.get_text_stream("stdin").read()
+        else:
+            try:
+                raw = Path(data_file).read_text(encoding="utf-8")
+            except OSError as exc:
+                _abort(f"cannot read --data-file {data_file!r}: {exc}")
+        payload = _parse_json_obj(raw, "--data-file")
+    elif fields:
+        payload = _parse_kv_fields(fields)
+    with make_client(ctx) as c:
+        try:
+            emit(ctx, bridge_core.raw_request(c, path, payload, timeout=timeout))
+        except (MqttError, ValueError) as exc:
+            _abort(str(exc))
+
+
 # ──────────────────────────────────────────────────────── devices
 
 

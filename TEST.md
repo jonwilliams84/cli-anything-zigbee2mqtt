@@ -20,8 +20,8 @@ This is exactly the CI gate; it must exit 0 before merge.
 
 | File | What it covers |
 |---|---|
-| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit, `search_devices` inventory search, `identify` Identify-effect flash**), groups, scenes, ota (check/update/**abort**/schedule/unschedule **+ `check_all` network firmware sweep incl. `--downgrade`**), admin (**`network stats` aggregators**: `bridge_summary`/`summarize_inventory`/`availability_overview`/`battery_overview`/`linkquality_overview`/`network_stats`), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
-| `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule`, `device find --capability` → `device identify`, `network stats` totals → `device availability-sweep` / `device battery` drill-down agreement) |
+| `test_core.py` | Every core module against fake clients: bridge (info/state/options/definitions/watch/**`raw_request` + `normalize_request_path` (v0.14.0)*/), devices (list/rename/remove/set/get/state/stale/exposes/endpoints/clusters/reportings/availability **+ `battery_sweep` network battery audit, `search_devices` inventory search, `identify` Identify-effect flash**), groups, scenes, ota (check/update/**abort**/schedule/unschedule **+ `check_all` network firmware sweep incl. `--downgrade`**), admin (**`network stats` aggregators**: `bridge_summary`/`summarize_inventory`/`availability_overview`/`battery_overview`/`linkquality_overview`/`network_stats`), attributes (raw ZCL read/write), bindings, install_code, extensions, converters, k8s backend, mqtt_client, project config |
+| `test_full_e2e.py` | CLI layer end-to-end via CliRunner: every command group happy path + key error paths, `--json` output shapes, workflow tests (e.g. `ota check --all` → `ota schedule`, `device find --capability` → `device identify`, `network stats` totals → `device availability-sweep` / `device battery` drill-down agreement, `bridge request` → `bridge info`, v0.14.0 payload-source tests for `bridge request`: `--data` / `-F` / `--data-file` / JSON / error abort / conflict rejection) |
 | `test_cli_helpers.py` | CLI helper functions (`emit`, `_print_table`, `_parse_kv_fields`, …) |
 | `test_refine.py` | The v0.2.0 refine pass: bindings, generate-converter, configure-reporting, install codes, extensions, group options |
 | `test_coverage_boost.py` / `test_coverage_boost2.py` | Branch coverage for watch callbacks, malformed payloads, k8s backend |
@@ -180,7 +180,35 @@ This is exactly the CI gate; it must exit 0 before merge.
   `device availability-sweep` and `battery.low` equals the `low` rows of
   `device battery`).
 
-## Latest run (refine pass 12 / v0.13.0, 2026-10-30)
+## Latest run (refine pass 13 / v0.14.0, 2026-11-08)
+
+- 1190 passed, 0 failed
+- Coverage: gate green (`--cov-fail-under=80`), total 98.25%
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **raw bridge-request escape hatch (`bridge request`)** —
+  the typed groups wrap every bridge request/response endpoint z2m exposed
+  when the harness was built, but z2m's bridge API grows every release and a
+  z2m *extension* can register custom `bridge/request/...` endpoints at
+  runtime. Until now such endpoints required hand-crafted `mqtt publish`
+  calls with no correlated response, no error-status detection and no
+  timeout. `bridge request <path> [-F key=value] [--data JSON]
+  [--data-file FILE|-] [--timeout S] [--json]` goes through the same
+  `BridgeClient.request` machinery as every typed command: transaction-id
+  correlation, `status: error` → `error:` abort (exit 1), and local
+  validation (payload-source conflict, bad JSON, empty path) before any
+  broker connection. Path accepts bare (`permit_join`), prefixed
+  (`bridge/request/permit_join`) and fully-qualified
+  (`zigbee2mqtt/bridge/request/permit_join`) forms. Core functions in
+  `core/bridge.py`: `normalize_request_path`, `raw_request` (client-free
+  validation, delegates to `BridgeClient`).
+  26 new tests: 13 unit (`test_core.py`: `TestNormalizeRequestPath`,
+  `TestRawRequest`) and 12 E2E/workflow (`test_full_e2e.py`:
+  `TestBridgeRequestCommand` — payload via `--data` / `-F` / `--data-file`,
+  JSON output, error-status abort, conflict rejection before connecting,
+  unmodelled endpoint pass-through, path normalization, and a
+  `bridge request` → `bridge info` workflow).
+
+## Previous run (refine pass 12 / v0.13.0, 2026-10-30)
 
 - 1164 passed, 0 failed
 - Coverage: gate green (`--cov-fail-under=80`), total 98.40%

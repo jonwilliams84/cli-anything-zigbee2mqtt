@@ -4385,3 +4385,104 @@ class TestConverterMqttRemove:
 
         with pytest.raises(ValueError):
             converters_core.remove_mqtt(FakeConverterBridgeClient(), "")
+
+
+# ── raw bridge requests (v0.14.0) ────────────────────────────────────────────
+
+
+class TestNormalizeRequestPath:
+    def test_bare_path_unchanged(self):
+        from cli_anything.zigbee2mqtt.core.bridge import normalize_request_path
+
+        assert normalize_request_path("permit_join") == "permit_join"
+
+    def test_multilevel_path_unchanged(self):
+        from cli_anything.zigbee2mqtt.core.bridge import normalize_request_path
+
+        assert normalize_request_path("group/simulate/recall") == "group/simulate/recall"
+
+    def test_bridge_request_prefix_stripped(self):
+        from cli_anything.zigbee2mqtt.core.bridge import normalize_request_path
+
+        assert normalize_request_path("bridge/request/permit_join") == "permit_join"
+
+    def test_fully_qualified_base_topic_form(self):
+        from cli_anything.zigbee2mqtt.core.bridge import normalize_request_path
+
+        assert normalize_request_path("zigbee2mqtt/bridge/request/permit_join") == "permit_join"
+
+    def test_leading_trailing_slashes_stripped(self):
+        from cli_anything.zigbee2mqtt.core.bridge import normalize_request_path
+
+        assert normalize_request_path("/permit_join/") == "permit_join"
+
+    def test_whitespace_only_raises(self):
+        from cli_anything.zigbee2mqtt.core.bridge import normalize_request_path
+
+        with pytest.raises(ValueError):
+            normalize_request_path("   ")
+        with pytest.raises(ValueError):
+            normalize_request_path("")
+
+    def test_bare_prefix_alone_raises(self):
+        from cli_anything.zigbee2mqtt.core.bridge import normalize_request_path
+
+        with pytest.raises(ValueError):
+            normalize_request_path("bridge/request")
+
+
+class TestRawRequest:
+    def test_bare_path_reaches_client(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeConverterBridgeClient()
+        resp = bridge_core.raw_request(client, "permit_join", {"value": True})
+        assert client.requests[0]["path"] == "permit_join"
+        assert client.requests[0]["payload"] == {"value": True}
+        assert resp["status"] == "ok"
+
+    def test_fully_qualified_path_normalized(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeConverterBridgeClient()
+        bridge_core.raw_request(client, "zigbee2mqtt/bridge/request/permit_join", None)
+        assert client.requests[0]["path"] == "permit_join"
+
+    def test_none_payload_becomes_empty_object(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeConverterBridgeClient()
+        bridge_core.raw_request(client, "health_check", None)
+        assert client.requests[0]["payload"] is None
+
+    def test_payload_must_be_a_dict_or_none(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeConverterBridgeClient()
+        with pytest.raises(ValueError, match="JSON object"):
+            bridge_core.raw_request(client, "permit_join", ["bad"])
+        with pytest.raises(ValueError, match="JSON object"):
+            bridge_core.raw_request(client, "permit_join", "value")
+        assert client.requests == []
+
+    def test_timeout_passes_through(self):
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        seen: dict = {}
+
+        class Recording(FakeConverterBridgeClient):
+            def request(self, path, payload=None, *, timeout=15.0):
+                seen["timeout"] = timeout
+                return {"status": "ok"}
+
+        bridge_core.raw_request(Recording(), "permit_join", {}, timeout=42.0)
+        assert seen["timeout"] == 42.0
+
+    def test_unknown_path_is_forwarded_as_is(self):
+        # the whole point: an endpoint the typed groups never modeled still
+        # goes through, exactly as the caller wrote it (after normalization)
+        from cli_anything.zigbee2mqtt.core import bridge as bridge_core
+
+        client = FakeConverterBridgeClient()
+        bridge_core.raw_request(client, "my_extension/do_thing", {"value": 1})
+        assert client.requests[0]["path"] == "my_extension/do_thing"

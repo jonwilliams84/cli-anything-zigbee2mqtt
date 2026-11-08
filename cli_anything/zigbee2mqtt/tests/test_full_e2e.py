@@ -4633,3 +4633,314 @@ class TestConverterMqttCommands:
         assert saved.exit_code == 0, saved.output
         assert shown.exit_code == 0, shown.output
         assert "// diy converter" in shown.output
+
+
+# ── bridge request escape hatch (v0.14.0) ────────────────────────────────────
+
+
+class TestBridgeRequestCommand:
+    def _client(self):
+        return FakeBridgeClient()
+
+    def test_data_json_payload_reaches_bridge(self, fake_client):
+        client = self._client()
+        client.set_response("permit_join", {"status": "ok", "transaction": "t"})
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "--data",
+                    '{"value": true, "time": 60}',
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        path, payload = client.requests[0]
+        assert path == "permit_join"
+        assert payload == {"value": True, "time": 60}
+
+    def test_f_fields_are_json_decoded(self, fake_client):
+        client = self._client()
+        client.set_response("permit_join", {"status": "ok"})
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "-F",
+                    "value=true",
+                    "-F",
+                    "time=60",
+                    "-F",
+                    "device=Lamp",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        path, payload = client.requests[0]
+        assert path == "permit_join"
+        # JSON-decoded: bool stays bool, int stays int, plain string stays string
+        assert payload == {"value": True, "time": 60, "device": "Lamp"}
+
+    def test_no_payload_sends_empty_object(self, fake_client):
+        client = self._client()
+        client.set_response("health_check", {"status": "ok"})
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "bridge", "request", "health_check"]
+            )
+        assert result.exit_code == 0, result.output
+        path, payload = client.requests[0]
+        assert path == "health_check"
+        assert payload == {}
+
+    def test_data_file_payload(self, fake_client, tmp_path):
+        client = self._client()
+        client.set_response("device/options", {"status": "ok"})
+        pf = tmp_path / "payload.json"
+        pf.write_text(json.dumps({"id": "Lamp", "options": {"transition": 0.5}}), encoding="utf-8")
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "device/options",
+                    "--data-file",
+                    str(pf),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        path, payload = client.requests[0]
+        assert path == "device/options"
+        assert payload == {"id": "Lamp", "options": {"transition": 0.5}}
+
+    def test_json_output_is_parseable(self, fake_client):
+        client = self._client()
+        client.set_response("permit_join", {"status": "ok", "data": {"value": True}})
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "-F",
+                    "value=true",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+
+    def test_error_status_aborts(self, fake_client):
+        from cli_anything.zigbee2mqtt.core.mqtt_client import MqttError
+
+        client = self._client()
+
+        def erroring(path, payload=None, *, timeout=15.0):
+            raise MqttError("permit_join: not permitted")
+
+        client.request = erroring
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "-F",
+                    "value=true",
+                ],
+            )
+        assert result.exit_code == 1
+        assert "error:" in result.output
+        assert "not permitted" in result.output
+
+    def test_unmodelled_endpoint_passes_through(self, fake_client):
+        # an endpoint no typed group knows about must still work — the whole
+        # point of the escape hatch
+        client = self._client()
+        client.set_response("my_extension/do_thing", {"status": "ok", "data": {"done": 1}})
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "bridge",
+                    "request",
+                    "my_extension/do_thing",
+                    "-F",
+                    "value=1",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["done"] == 1
+
+    def test_conflicting_payload_sources_rejected(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "--data",
+                    '{"value": true}',
+                    "-F",
+                    "time=60",
+                ],
+            )
+        assert result.exit_code == 1
+        assert "not both" in result.output
+        assert client.requests == []
+
+    def test_invalid_json_data_rejected_before_connecting(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "--data",
+                    "{bad json",
+                ],
+            )
+        assert result.exit_code == 1
+        assert "valid JSON" in result.output
+        assert client.requests == []
+
+    def test_data_file_must_exist(self, fake_client):
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "--data-file",
+                    "/no/such/file.json",
+                ],
+            )
+        assert result.exit_code == 1
+        assert "cannot read" in result.output
+        assert client.requests == []
+
+    def test_empty_payload_sources_cancel_each_other(self, fake_client, tmp_path):
+        # --data pointing at a nonexistent file with -F absent: exit 1, no MQTT
+        client = self._client()
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "permit_join",
+                    "-F",
+                    "notakeyvalue",
+                ],
+            )
+        assert result.exit_code == 1
+        assert client.requests == []
+
+    def test_fully_qualified_path_form(self, fake_client):
+        client = self._client()
+        client.set_response("permit_join", {"status": "ok"})
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "bridge",
+                    "request",
+                    "zigbee2mqtt/bridge/request/permit_join",
+                    "-F",
+                    "value=true",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert client.requests[0][0] == "permit_join"
+
+    def test_workflow_request_then_info(self, fake_client):
+        # workflow: raw request flips permit-join, then the typed surface
+        # still answers normally in the same session
+        client = self._client()
+        client.set_response("permit_join", {"status": "ok"})
+        client.set_retained("zigbee2mqtt/bridge/info", json.dumps({"version": "1.33.0"}))
+        with patch(
+            "cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client",
+            lambda ctx: client,
+        ):
+            req = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "bridge", "request", "permit_join", "-F", "value=true"],
+            )
+            info = _runner().invoke(cli, ["--mqtt-host", "x", "bridge", "info"])
+        assert req.exit_code == 0, req.output
+        assert info.exit_code == 0, info.output
+        assert "version" in info.output

@@ -68,6 +68,10 @@ cli-anything-zigbee2mqtt bridge definitions --cluster genOnOff
 cli-anything-zigbee2mqtt device read 'Lounge Lamp' --cluster genBasic --attribute zclVersion
 cli-anything-zigbee2mqtt device write 'Lounge Lamp' --cluster genOnOff onOff=1
 
+# ANY bridge request — endpoints this harness never modeled (v0.14.0)
+cli-anything-zigbee2mqtt --json bridge request group/simulate/recall -F id=3 -F scene_id=1
+cli-anything-zigbee2mqtt bridge request my_extension/do_thing -F value=1
+
 # Open the network for 60 seconds (pair a new device)
 cli-anything-zigbee2mqtt network permit-join on --time 60
 
@@ -90,7 +94,7 @@ cli-anything-zigbee2mqtt converter remove my-override.js
 
 | Group | Purpose |
 |---|---|
-| `bridge` | info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging |
+| `bridge` | info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging — plus `request PATH` (v0.14.0): send any bridge request/response endpoint (future z2m API or extension-registered) with full transaction correlation |
 | `device` | list / find / show / rename / remove / configure / interview / options / set / get / state / watch / stale / battery / identify / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen |
 | `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp |
 | `scene` | list / store / recall / add / rename / remove / remove-all (Zigbee scenes on a device or group) |
@@ -110,6 +114,7 @@ cli_anything/zigbee2mqtt/
 ├── core/
 │   ├── mqtt_client.py      # BridgeClient — request/response over MQTT
 │   ├── bridge.py           # bridge info/state/restart/health/options/watch/definitions
+│   │                       # + raw_request / normalize_request_path (v0.14.0 escape hatch)
 │   ├── devices.py          # list/show/rename/remove/configure/interview/set/get
 │   │                       # + exposes / endpoints / clusters / reportings introspection
 │   ├── groups.py           # group CRUD + membership + groupcast set/get/state
