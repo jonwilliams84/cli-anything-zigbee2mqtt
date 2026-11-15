@@ -84,6 +84,12 @@ cli-anything-zigbee2mqtt scene store kitchen-lights 1 --name Chill
 cli-anything-zigbee2mqtt scene recall kitchen-lights 1
 cli-anything-zigbee2mqtt --json scene list kitchen-lights
 
+# Cover shortcuts (v0.15.0 — validated before connecting, `tilt` = tilt_position)
+cli-anything-zigbee2mqtt device open 'Lounge Blinds'
+cli-anything-zigbee2mqtt --json device position 'Lounge Blinds' 50
+cli-anything-zigbee2mqtt device tilt 'Lounge Blinds' 30
+cli-anything-zigbee2mqtt --json group close 'dining-shades'   # one room groupcast
+
 # External converter file management (uses kubectl)
 cli-anything-zigbee2mqtt converter list
 cli-anything-zigbee2mqtt converter add my-override.js ./my-override.js
@@ -95,8 +101,8 @@ cli-anything-zigbee2mqtt converter remove my-override.js
 | Group | Purpose |
 |---|---|
 | `bridge` | info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging — plus `request PATH` (v0.14.0): send any bridge request/response endpoint (future z2m API or extension-registered) with full transaction correlation |
-| `device` | list / find / show / rename / remove / configure / interview / options / set / get / state / watch / stale / battery / identify / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen |
-| `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp |
+| `device` | list / find / show / rename / remove / configure / interview / options / set / get / state / watch / stale / battery / identify / on / off / toggle / brightness / color / color-temp / open / close / stop / position / tilt / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen |
+| `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp / open / close / stop / position / tilt |
 | `scene` | list / store / recall / add / rename / remove / remove-all (Zigbee scenes on a device or group) |
 | `ota` | check / update / schedule / unschedule (`check --all` sweeps the network) |
 | `network` | permit-join / map / touchlink-* / coordinator-check / backup |
@@ -119,6 +125,7 @@ cli_anything/zigbee2mqtt/
 │   │                       # + exposes / endpoints / clusters / reportings introspection
 │   ├── groups.py           # group CRUD + membership + groupcast set/get/state
 │   │                       # + find_group / set_group_light (lighting groupcast)
+│   │                       # + set_group_cover (cover groupcast)
 │   ├── scenes.py           # scene store/recall/add/remove/rename + list
 │   ├── ota.py              # OTA check / update / schedule / unschedule
 │   │                       # + check_all (whole-network firmware sweep)

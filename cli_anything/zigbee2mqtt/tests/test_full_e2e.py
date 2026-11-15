@@ -4944,3 +4944,272 @@ class TestBridgeRequestCommand:
         assert req.exit_code == 0, req.output
         assert info.exit_code == 0, info.output
         assert "version" in info.output
+
+
+# ── cover (window-covering) convenience commands (v0.15.0 refine) ────────────
+
+COVER_DEVICES = [
+    {
+        "friendly_name": "Lounge Blinds",
+        "ieee_address": "0xccc",
+        "type": "EndDevice",
+        "power_source": "Mains (single phase)",
+        "manufacturer": "IKEA of Sweden",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": "KADRILJ roller blind",
+            "vendor": "IKEA",
+            "exposes": [
+                {
+                    "type": "cover",
+                    "features": [
+                        {"property": "position", "access": 7},
+                        {"property": "tilt_position", "access": 7},
+                        {"property": "state", "access": 7},
+                    ],
+                }
+            ],
+        },
+    }
+]
+
+
+class TestCoverCommands:
+    """device open / close / stop / position / tilt (v0.15.0)."""
+
+    def _client(self):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(COVER_DEVICES))
+        return client
+
+    def _run(self, client, *args, as_json=False):
+        argv = (["--json"] if as_json else []) + ["--mqtt-host", "x", *args]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            return _runner().invoke(cli, argv)
+
+    def test_open(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "open", "Lounge Blinds")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Blinds/set", {"state": "OPEN"})]
+
+    def test_close(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "close", "Lounge Blinds")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Blinds/set", {"state": "CLOSE"})]
+
+    def test_stop(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "stop", "Lounge Blinds")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Blinds/set", {"state": "STOP"})]
+
+    def test_position(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "position", "Lounge Blinds", "50")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Blinds/set", {"position": 50})]
+
+    def test_position_bounds_accepted(self, fake_client):
+        client = self._client()
+        lo = self._run(client, "device", "position", "Lounge Blinds", "0")
+        hi = self._run(client, "device", "position", "Lounge Blinds", "100")
+        assert lo.exit_code == 0, lo.output
+        assert hi.exit_code == 0, hi.output
+        assert client.published == [
+            ("zigbee2mqtt/Lounge Blinds/set", {"position": 0}),
+            ("zigbee2mqtt/Lounge Blinds/set", {"position": 100}),
+        ]
+
+    def test_position_out_of_range_aborts_before_connect(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "position", "Lounge Blinds", "101")
+        assert result.exit_code != 0
+        assert "between 0 and 100" in result.output
+        assert client.published == []
+
+    def test_position_non_integer_rejected_by_click(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "position", "Lounge Blinds", "halfway")
+        assert result.exit_code != 0
+        assert client.published == []
+
+    def test_tilt_maps_to_tilt_position_property(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "tilt", "Lounge Blinds", "30")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Blinds/set", {"tilt_position": 30})]
+
+    def test_tilt_out_of_range_aborts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "tilt", "Lounge Blinds", "-1")
+        assert result.exit_code != 0
+        assert client.published == []
+
+    def test_ieee_address_resolved_to_friendly_name(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "open", "0xccc")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Lounge Blinds/set", {"state": "OPEN"})]
+
+    def test_unknown_device_aborts_without_publish(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "open", "Ghost Blind")
+        assert result.exit_code != 0
+        assert "no device matching" in result.output
+        assert client.published == []
+
+    def test_json_output_shape(self, fake_client):
+        client = self._client()
+        result = self._run(client, "device", "position", "Lounge Blinds", "40", as_json=True)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["topic"] == "zigbee2mqtt/Lounge Blinds/set"
+        assert data["published"] == {"position": 40}
+        assert data["friendly_name"] == "Lounge Blinds"
+        assert data["rc"] == 0
+
+    def test_help_lists_cover_commands(self, fake_client):
+        result = _runner().invoke(cli, ["device", "--help"])
+        assert result.exit_code == 0, result.output
+        for cmd in ("open", "close", "stop", "position", "tilt"):
+            assert cmd in result.output
+
+
+class TestGroupCoverCommands:
+    """group open / close / stop / position / tilt (v0.15.0)."""
+
+    def _client(self):
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/groups", E2E_GROUPS)
+        return client
+
+    def _run(self, client, *args, as_json=False):
+        argv = (["--json"] if as_json else []) + ["--mqtt-host", "x", *args]
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            return _runner().invoke(cli, argv)
+
+    def test_open_groupcasts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "open", "kitchen-lights")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"state": "OPEN"})]
+
+    def test_close_groupcasts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "close", "kitchen-lights")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"state": "CLOSE"})]
+
+    def test_stop_groupcasts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "stop", "kitchen-lights")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"state": "STOP"})]
+
+    def test_position_groupcasts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "position", "kitchen-lights", "70")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"position": 70})]
+
+    def test_tilt_groupcasts(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "tilt", "kitchen-lights", "25")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/kitchen-lights/set", {"tilt_position": 25})]
+
+    def test_position_out_of_range_aborts_before_connect(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "position", "kitchen-lights", "255")
+        assert result.exit_code != 0
+        assert "between 0 and 100" in result.output
+        assert client.published == []
+
+    def test_numeric_group_id_resolves_to_friendly_name_topic(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "open", "2")
+        assert result.exit_code == 0, result.output
+        assert client.published == [("zigbee2mqtt/Hallway/set", {"state": "OPEN"})]
+
+    def test_unknown_group_aborts_without_publish(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "open", "ghost-group")
+        assert result.exit_code != 0
+        assert "no group matching" in result.output
+        assert client.published == []
+
+    def test_json_output_shape_includes_group_id(self, fake_client):
+        client = self._client()
+        result = self._run(client, "group", "position", "kitchen-lights", "10", as_json=True)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["topic"] == "zigbee2mqtt/kitchen-lights/set"
+        assert data["published"] == {"position": 10}
+        assert data["id"] == 1
+        assert data["rc"] == 0
+
+    def test_help_lists_cover_commands(self, fake_client):
+        result = _runner().invoke(cli, ["group", "--help"])
+        assert result.exit_code == 0, result.output
+        for cmd in ("open", "close", "stop", "position", "tilt"):
+            assert cmd in result.output
+
+
+class TestCoverWorkflows:
+    """Combine cover commands with find / state read-back."""
+
+    def test_find_cover_then_position_it(self, fake_client):
+        """device find --capability position → device position, same session."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(COVER_DEVICES))
+        r = _runner()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            found = r.invoke(
+                cli, ["--json", "--mqtt-host", "x", "device", "find", "--capability", "position"]
+            )
+            assert found.exit_code == 0, found.output
+            assert [d["friendly_name"] for d in json.loads(found.output)] == ["Lounge Blinds"]
+            moved = r.invoke(cli, ["--mqtt-host", "x", "device", "position", "Lounge Blinds", "80"])
+            assert moved.exit_code == 0, moved.output
+            assert client.published == [("zigbee2mqtt/Lounge Blinds/set", {"position": 80})]
+
+    def test_open_then_state_readback(self, fake_client):
+        """Cover set commands have no bridge/response — read retained state back."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(COVER_DEVICES))
+        r = _runner()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            opened = r.invoke(cli, ["--mqtt-host", "x", "device", "open", "Lounge Blinds"])
+            assert opened.exit_code == 0, opened.output
+            client.set_retained("zigbee2mqtt/Lounge Blinds", json.dumps({"position": 100}))
+            st = r.invoke(cli, ["--json", "--mqtt-host", "x", "device", "state", "Lounge Blinds"])
+            assert st.exit_code == 0, st.output
+            assert json.loads(st.output)["position"] == 100
+
+    def test_group_close_then_stop_workflow(self, fake_client):
+        """close a room of covers, then stop a mid-travel blind in the same group."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/groups", E2E_GROUPS)
+        r = _runner()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            closed = r.invoke(cli, ["--mqtt-host", "x", "group", "close", "kitchen-lights"])
+            assert closed.exit_code == 0, closed.output
+            stopped = r.invoke(cli, ["--mqtt-host", "x", "group", "stop", "kitchen-lights"])
+            assert stopped.exit_code == 0, stopped.output
+            assert client.published == [
+                ("zigbee2mqtt/kitchen-lights/set", {"state": "CLOSE"}),
+                ("zigbee2mqtt/kitchen-lights/set", {"state": "STOP"}),
+            ]
+
+    def test_unknown_group_never_connects_to_device_named_like_a_group(self, fake_client):
+        """A device can share a group's name — unknown group must abort, not publish."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(COVER_DEVICES))
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(cli, ["--mqtt-host", "x", "group", "open", "Lounge Blinds"])
+        assert result.exit_code != 0
+        assert "no group matching" in result.output
+        assert client.published == []

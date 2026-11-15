@@ -1305,3 +1305,71 @@ def set_light(client: BridgeClient, friendly_name: str, payload: dict) -> dict:
     topic = f"{client.base_topic}/{friendly_name}/set"
     rc = client.publish(topic, payload)
     return {"friendly_name": friendly_name, "topic": topic, "published": payload, "rc": rc}
+
+
+# ── cover (window covering) convenience layer (v0.15.0 refine) ────────────
+
+COVER_POSITION_MIN = 0
+COVER_POSITION_MAX = 100
+COVER_ACTIONS = ("OPEN", "CLOSE", "STOP")
+
+
+def check_percentage(value) -> int:
+    """Validate a percent value (0-100) — cover position and tilt."""
+    try:
+        p = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"percentage must be an integer, got {value!r}") from None
+    if not COVER_POSITION_MIN <= p <= COVER_POSITION_MAX:
+        raise ValueError(
+            f"percentage must be between {COVER_POSITION_MIN} and {COVER_POSITION_MAX}, "
+            f"got {value!r}"
+        )
+    return p
+
+
+def cover_payload(*, action=None, position=None, tilt=None) -> dict:
+    """Build and validate a cover command payload for ``<base>/<name>/set``.
+
+    Exactly one of ``action`` (OPEN / CLOSE / STOP — the same ``state`` key
+    lights use, with cover-specific values), ``position`` (0-100) or ``tilt``
+    (0-100, published as the ``tilt_position`` property z2m's cover exposes
+    list) must be given. Raises ``ValueError`` with a user-facing message for
+    anything invalid — the CLI calls this BEFORE opening the MQTT connection.
+    """
+    given = [v is not None for v in (action, position, tilt)]
+    if sum(given) > 1:
+        raise ValueError(
+            "cover commands take exactly one of action (open/close/stop), position or tilt"
+        )
+    payload: dict = {}
+    if action is not None:
+        s = str(action).upper()
+        if s not in COVER_ACTIONS:
+            raise ValueError(
+                f"cover action must be one of {', '.join(COVER_ACTIONS)}, got {action!r}"
+            )
+        payload["state"] = s
+    if position is not None:
+        payload["position"] = check_percentage(position)
+    if tilt is not None:
+        payload["tilt_position"] = check_percentage(tilt)
+    if not payload:
+        raise ValueError("no cover property given (action/position/tilt)")
+    return payload
+
+
+def set_cover(client: BridgeClient, friendly_name: str, payload: dict) -> dict:
+    """Publish a validated cover payload to ``<base>/<friendly_name>/set``.
+
+    Returns ``{"friendly_name", "topic", "published", "rc"}`` (same shape as
+    :func:`set_light`); the cover itself confirms by publishing its new
+    position/state, which you can read with ``device state``.
+    """
+    if not friendly_name:
+        raise ValueError("friendly_name is required")
+    if not payload:
+        raise ValueError("payload must be a non-empty dict")
+    topic = f"{client.base_topic}/{friendly_name}/set"
+    rc = client.publish(topic, payload)
+    return {"friendly_name": friendly_name, "topic": topic, "published": payload, "rc": rc}

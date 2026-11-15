@@ -4486,3 +4486,155 @@ class TestRawRequest:
         client = FakeConverterBridgeClient()
         bridge_core.raw_request(client, "my_extension/do_thing", {"value": 1})
         assert client.requests[0]["path"] == "my_extension/do_thing"
+
+
+# ── cover (window-covering) convenience layer (v0.15.0 refine) ───────────────
+
+
+class TestCheckPercentage:
+    def test_valid_bounds(self):
+        assert devices_core.check_percentage(0) == 0
+        assert devices_core.check_percentage(50) == 50
+        assert devices_core.check_percentage(100) == 100
+
+    def test_numeric_string_coerced(self):
+        assert devices_core.check_percentage("25") == 25
+
+    def test_out_of_range(self):
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            devices_core.check_percentage(101)
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            devices_core.check_percentage(-1)
+
+    def test_non_integer(self):
+        with pytest.raises(ValueError, match="must be an integer"):
+            devices_core.check_percentage("halfway")
+
+
+class TestCoverPayload:
+    def test_actions_normalize_to_state_key(self):
+        assert devices_core.cover_payload(action="open") == {"state": "OPEN"}
+        assert devices_core.cover_payload(action="close") == {"state": "CLOSE"}
+        assert devices_core.cover_payload(action="stop") == {"state": "STOP"}
+        assert devices_core.cover_payload(action="OPEN") == {"state": "OPEN"}
+
+    def test_invalid_action_raises(self):
+        with pytest.raises(ValueError, match="OPEN, CLOSE, STOP"):
+            devices_core.cover_payload(action="pause")
+
+    def test_position(self):
+        assert devices_core.cover_payload(position=50) == {"position": 50}
+        assert devices_core.cover_payload(position="75") == {"position": 75}
+
+    def test_position_out_of_range(self):
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            devices_core.cover_payload(position=101)
+
+    def test_tilt_maps_to_tilt_position_property(self):
+        assert devices_core.cover_payload(tilt=30) == {"tilt_position": 30}
+
+    def test_tilt_out_of_range(self):
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            devices_core.cover_payload(tilt=-5)
+
+    def test_combining_sources_rejected(self):
+        with pytest.raises(ValueError, match="exactly one"):
+            devices_core.cover_payload(action="OPEN", position=50)
+        with pytest.raises(ValueError, match="exactly one"):
+            devices_core.cover_payload(position=50, tilt=20)
+
+
+class TestSetCover:
+    def test_topic_and_shape(self):
+        c = RecordingClient()
+        result = devices_core.set_cover(c, "Lounge Blinds", {"position": 50})
+        assert result["topic"] == "zigbee2mqtt/Lounge Blinds/set"
+        assert result["friendly_name"] == "Lounge Blinds"
+        assert result["published"] == {"position": 50}
+        assert result["rc"] == 0
+        assert c.published == [("zigbee2mqtt/Lounge Blinds/set", {"position": 50})]
+
+    def test_base_topic_honoured(self):
+        c = RecordingClient(base_topic="z2m-hub")
+        result = devices_core.set_cover(c, "Curtain", {"state": "OPEN"})
+        assert result["topic"] == "z2m-hub/Curtain/set"
+
+    def test_rc_propagated(self):
+        c = RecordingClient()
+        c.rc = 3
+        assert devices_core.set_cover(c, "Curtain", {"state": "OPEN"})["rc"] == 3
+
+    def test_empty_name_rejected(self):
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="friendly_name is required"):
+            devices_core.set_cover(c, "", {"state": "OPEN"})
+
+    def test_empty_payload_rejected(self):
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="non-empty dict"):
+            devices_core.set_cover(c, "Curtain", {})
+
+
+class TestSetGroupCover:
+    def test_publishes_groupcast_to_group_set_topic(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        result = groups_core.set_group_cover(c, "kitchen-lights", {"state": "OPEN"})
+        assert result["topic"] == "zigbee2mqtt/kitchen-lights/set"
+        assert result["published"] == {"state": "OPEN"}
+        assert result["friendly_name"] == "kitchen-lights"
+        assert result["id"] == 1
+        assert result["rc"] == 0
+
+    def test_numeric_group_id_resolves_to_friendly_name(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        result = groups_core.set_group_cover(c, 2, {"position": 40})
+        assert result["topic"] == "zigbee2mqtt/Hallway/set"
+        assert result["friendly_name"] == "Hallway"
+
+    def test_unknown_group_aborts_before_publish(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        with pytest.raises(ValueError, match="no group matching 'ghost'"):
+            groups_core.set_group_cover(c, "ghost", {"state": "CLOSE"})
+        assert c.published == []
+
+    def test_no_retained_inventory_aborts(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="no group matching"):
+            groups_core.set_group_cover(c, "kitchen", {"position": 10})
+        assert c.published == []
+
+    def test_empty_payload_rejected(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        with pytest.raises(ValueError, match="non-empty dict"):
+            groups_core.set_group_cover(c, "kitchen", {})
+
+    def test_rc_is_propagated(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        c.rc = 6
+        result = groups_core.set_group_cover(c, "kitchen-lights", {"state": "STOP"})
+        assert result["rc"] == 6
+
+    def test_works_with_cover_payload_builder(self):
+        from cli_anything.zigbee2mqtt.core import groups as groups_core
+
+        c = RecordingClient()
+        c.set_retained("zigbee2mqtt/bridge/groups", GROUP_INVENTORY)
+        payload = devices_core.cover_payload(tilt=25)
+        result = groups_core.set_group_cover(c, "Hallway", payload)
+        assert result["published"] == {"tilt_position": 25}

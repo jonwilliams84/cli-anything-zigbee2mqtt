@@ -247,3 +247,31 @@ def read_state(client: BridgeClient, group: str, *, timeout: float = 3.0) -> dic
     except json.JSONDecodeError:
         return {"raw": raw}
     return data if isinstance(data, dict) else {"raw": raw}
+
+
+def set_group_cover(client: BridgeClient, group: str, payload: dict) -> dict:
+    """Publish a *validated* cover payload to ``<base>/<group>/set`` (groupcast).
+
+    The payload should come from :func:`devices.cover_payload`, which validates
+    action (open/close/stop), position and tilt BEFORE any MQTT connection.
+    The group is resolved against the retained ``bridge/groups`` inventory
+    first — addressing a group of a device with the same friendly_name would
+    otherwise hit the device, so an unknown group aborts before any publish.
+    Returns ``{"friendly_name", "topic", "published", "id", "rc"}`` — same
+    shape as :func:`set_group_light`.
+    """
+    if not payload:
+        raise ValueError("payload must be a non-empty dict")
+    record = find_group(client, group, timeout=_LIGHT_CACHE_TIMEOUT)
+    if record is None:
+        raise ValueError(f"no group matching {group!r}")
+    name = record.get("friendly_name") or str(group)
+    topic = f"{client.base_topic}/{name}/set"
+    rc = client.publish(topic, payload)
+    return {
+        "friendly_name": name,
+        "id": record.get("id"),
+        "topic": topic,
+        "published": payload,
+        "rc": rc,
+    }
