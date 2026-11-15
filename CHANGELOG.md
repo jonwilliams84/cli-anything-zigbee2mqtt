@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented here.
 
+## [0.15.0] — 2026-11-15
+
+- **Cover convenience layer (`device open/close/stop/position/tilt` + group
+  groupcast twins)**: the harness could blind-toggle a bulb with one word
+  since v0.7.0, but the other half of every smart home — blinds, curtains,
+  roller shades — still meant hand-writing `device set` payloads like
+  `{"position": 50}` or `{"state": "STOP"}` (and hoping the key was right).
+  This release gives covers the same validated shortcut layer, device and
+  group.
+  - `device open <name>`, `device close <name>`, `device stop <name>` —
+    publish `{"state": "OPEN" | "CLOSE" | "STOP"}` to `<base>/<name>/set`
+    (the same `state` key lights use, with cover-specific values).
+  - `device position <name> 0-100` — publish `{"position": N}` (0 = fully
+    closed, 100 = fully open).
+  - `device tilt <name> 0-100` — publish `{"tilt_position": N}`, the
+    property z2m's cover exposes list actually names; only covers with
+    slats (blinds, shutters) accept tilt, and `device exposes <name>
+    --settable` tells you beforehand.
+  - `group open/close/stop/position/tilt <group>` — the room-scale twins:
+    one Zigbee groupcast drives every cover in the group at once, with the
+    same guards as the lighting groupcasts — the group is resolved against
+    the retained `bridge/groups` inventory first, so `group close` to a
+    mistyped name (or one that matches a *device*) aborts without
+    publishing anything.
+  - Why it matters: covers are one of the most common device classes after
+    lights and until now had zero typed surface. The lighting-layer
+    conventions carry over exactly — values (`position`/`tilt` must be an
+    integer 0-100, exactly one of action/position/tilt) are validated
+    BEFORE any broker connection, IEEE addresses resolve to friendly names
+    first, unknown devices/groups abort instead of publishing to a
+    nonexistent topic, and `--json` output is gate-scriptable. Cover set
+    commands arrive on `<base>/<name>/set` with no `bridge/response`
+    counterpart, so verify with `device state <name>` / `group state
+    <name>` — same read-back contract as lighting and scenes.
+- Core functions in `core/devices.py`: `check_percentage`,
+  `cover_payload`, `set_cover`; in `core/groups.py`: `set_group_cover` —
+  all client-free where the transport allows, mirroring the
+  `check_brightness` / `light_payload` / `set_light` /
+  `set_group_light` family.
+- 50 new tests (26 unit + 24 E2E/workflow), suite at 1240 passed.
+  Documentation updated in README.md, both SKILL.md copies, CLAUDE.md and
+  TEST.md.
+
 ## [0.14.0] — 2026-11-08
 
 - **Raw bridge-request escape hatch (`bridge request`)**: the harness's typed

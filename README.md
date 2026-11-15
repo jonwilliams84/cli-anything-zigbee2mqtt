@@ -41,8 +41,8 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | Group | Examples |
 |---|---|
 | `bridge` | `info / state / status / restart / health / options-get / options-set / definitions / log-level / watch-events / watch-logging` — plus `request PATH` (v0.14.0), the escape hatch that sends *any* bridge request (documented or future z2m API, extension-registered endpoints) with full request/response correlation |
-| `device` | `list / find / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / identify / on / off / toggle / brightness / color / color-temp / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` |
-| `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp` — the last six are lighting groupcasts (v0.10.0) |
+| `device` | `list / find / show / rename / remove / configure / interview / options / set / get / watch / state / stale / battery / identify / on / off / toggle / brightness / color / color-temp / open / close / stop / position / tilt / exposes / endpoints / clusters / reportings / availability / availability-sweep / read / write / generate-converter / configure-reporting / bind / unbind / bindings / disable / enable / last-seen` — `open / close / stop / position / tilt` are the cover shortcuts (v0.15.0) |
+| `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp / open / close / stop / position / tilt` — the first six after `state` are lighting groupcasts (v0.10.0), the last five cover groupcasts (v0.15.0) |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check [name \| --all] / update / abort / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware; `--downgrade` works on `check` / `update` / `schedule` for firmware rollback, `abort` stops a running transfer |
 | `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup / stats` — `stats` is the one-shot fleet health summary (v0.12.0) |
@@ -88,6 +88,13 @@ cli-anything-zigbee2mqtt device brightness 'Lounge Lamp' 128 --transition 2
 cli-anything-zigbee2mqtt device color 'Lounge Lamp' #ff8800        # or 'red' or '255,136,0'
 cli-anything-zigbee2mqtt device color-temp 'Lounge Lamp' 370       # mireds (lower = cooler)
 cli-anything-zigbee2mqtt device color-temp 'Lounge Lamp' 2700 --kelvin
+
+# Cover shortcuts (blinds / curtains / shades; tilt publishes tilt_position)
+cli-anything-zigbee2mqtt device open 'Lounge Blinds'
+cli-anything-zigbee2mqtt --json device position 'Lounge Blinds' 50   # 0 = closed, 100 = open
+cli-anything-zigbee2mqtt device tilt 'Lounge Blinds' 30
+cli-anything-zigbee2mqtt device stop 'Lounge Blinds'                 # halt a moving cover
+cli-anything-zigbee2mqtt --json group close 'dining-shades'          # one room groupcast
 
 # OTA
 cli-anything-zigbee2mqtt ota check 'Radiator - Master Bedroom'
@@ -225,6 +232,23 @@ colors — happens before the MQTT connection, exactly like `device brightness`.
 `--json` output carries `{"friendly_name", "id", "topic", "published", "rc"}`;
 the group confirms by republishing its aggregate state, readable with
 `group state <GROUP>`.
+
+### Cover control: what to know (v0.15.0)
+
+`device open / close / stop / position / tilt` mirror the lighting shortcuts for
+covers. `open` / `close` / `stop` publish `{"state": "OPEN" | "CLOSE" | "STOP"}`
+to `<base>/<name>/set`; `position <name> 0-100` publishes `{"position": N}`
+(0 = fully closed, 100 = fully open) and `tilt <name> 0-100` publishes the
+`tilt_position` property z2m's cover exposes list (only covers with slats —
+blinds, shutters — accept tilt; `device exposes <name> --settable` tells you).
+Position/tilt values are validated before any MQTT connection; unknown devices
+abort instead of publishing to a nonexistent topic (IEEE addresses work). The
+`group` twins (`group open/close/stop/position/tilt`) drive a whole room of
+covers in ONE Zigbee groupcast, with the same group-vs-device name guard as the
+lighting groupcasts: the group is resolved against the retained
+`bridge/groups` inventory first, so `group open` to a mistyped or device-named
+target aborts instead of publishing. Cover set commands have no
+`bridge/response` — confirm with `device state <name>` / `group state <GROUP>`.
 
 ### Exposes, availability and raw ZCL: what to know
 
@@ -479,18 +503,21 @@ retained `bridge/converters` topic.
 python3 -m pytest cli_anything/zigbee2mqtt/tests/ -v
 ```
 
-1164 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
+1240 tests (unit + CLI end-to-end via `CliRunner`) cover the BridgeClient against
 a fake MQTT transport, every mutator in bindings / install_code / extensions /
 groups / scenes / attributes, the converter MQTT bridge path (save / list / show /
 remove with hot-load via the bridge API; list / show via the retained
 `bridge/converters` inventory), the read-side helpers in devices.py (read_state /
 find_stale / exposes / availability_sweep / battery_sweep /
 generate_external_definition / configure_reporting), the lighting
-convenience layer (on/off/toggle/brightness/color/color-temp), and
+convenience layer (on/off/toggle/brightness/color/color-temp), the cover
+convenience layer (open/close/stop/position/tilt, device and group), and
 multi-command workflows (create group → add member →
 groupcast set → store/recall scene; `device exposes` → `device set`; raw
 `device read` → `device state` read-back; `device find --capability
-brightness` → `device brightness <name>`). No broker and no kubectl needed.
+brightness` → `device brightness <name>`; `device find --capability
+position` → `device position <name>` → `device state` read-back). No broker
+and no kubectl needed.
 
 ## Releases
 

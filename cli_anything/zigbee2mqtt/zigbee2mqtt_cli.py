@@ -797,6 +797,86 @@ def device_color_temp(ctx, ident, mireds, kelvin, transition):
     _light_emit(ctx, ident, payload)
 
 
+# ── cover (window-covering) convenience commands (v0.15.0) ───────────────
+
+
+@device.command("open")
+@click.argument("ident")
+@click.pass_context
+def device_open(ctx, ident):
+    """Fully open a cover (publishes {"state": "OPEN"} to <base>/<name>/set).
+
+    IDENT is a friendly name or IEEE address. Only devices exposing the cover
+    feature react — check `device exposes <name> --settable`. Values never
+    reach an unknown device: a bad name aborts, and there is no position to
+    validate here so the payload is always well-formed.
+    """
+    try:
+        payload = devices_core.cover_payload(action="OPEN")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("close")
+@click.argument("ident")
+@click.pass_context
+def device_close(ctx, ident):
+    """Fully close a cover (publishes {"state": "CLOSE"} to <base>/<name>/set)."""
+    try:
+        payload = devices_core.cover_payload(action="CLOSE")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("stop")
+@click.argument("ident")
+@click.pass_context
+def device_stop(ctx, ident):
+    """Halt a moving cover (publishes {"state": "STOP"} to <base>/<name>/set)."""
+    try:
+        payload = devices_core.cover_payload(action="STOP")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("position")
+@click.argument("ident")
+@click.argument("pct", type=int)
+@click.pass_context
+def device_position(ctx, ident, pct):
+    """Set a cover's position (0-100; 0 = fully closed, 100 = fully open)."""
+    try:
+        payload = devices_core.cover_payload(position=pct)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
+@device.command("tilt")
+@click.argument("ident")
+@click.argument("pct", type=int)
+@click.pass_context
+def device_tilt(ctx, ident, pct):
+    """Set a cover's tilt angle (0-100, published as tilt_position).
+
+    Only covers with slats (blinds, shutters) accept tilt; check
+    `device exposes <name> --settable` for `tilt_position`.
+    """
+    try:
+        payload = devices_core.cover_payload(tilt=pct)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _light_emit(ctx, ident, payload)
+
+
 @device.command("ieee")
 @click.pass_context
 @click.argument("ident")
@@ -1711,6 +1791,90 @@ def group_color_temp(ctx, group_name, mireds, kelvin, transition):
         _abort(str(exc))
         return
     _group_light_emit(ctx, group_name, payload)
+
+
+# ── cover groupcast convenience commands (v0.15.0) ───────────────────────
+
+
+def _group_cover_emit(ctx: click.Context, group_name: str, payload: dict) -> None:
+    """Resolve a group and single-groupcast a cover payload (mirrors lights)."""
+    with make_client(ctx) as c:
+        try:
+            emit(ctx, groups_core.set_group_cover(c, group_name, payload))
+        except ValueError as exc:
+            _abort(str(exc))
+
+
+@group.command("open")
+@click.argument("group_name")
+@click.pass_context
+def group_open(ctx, group_name):
+    """Fully open every cover in GROUP_NAME with one Zigbee groupcast.
+
+    GROUP_NAME is the group's friendly_name or numeric id (matched against the
+    retained bridge/groups inventory). An unknown group aborts before any
+    publish; values are validated BEFORE any MQTT connection.
+    """
+    try:
+        payload = devices_core.cover_payload(action="OPEN")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_cover_emit(ctx, group_name, payload)
+
+
+@group.command("close")
+@click.argument("group_name")
+@click.pass_context
+def group_close(ctx, group_name):
+    """Fully close every cover in GROUP_NAME with one Zigbee groupcast."""
+    try:
+        payload = devices_core.cover_payload(action="CLOSE")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_cover_emit(ctx, group_name, payload)
+
+
+@group.command("stop")
+@click.argument("group_name")
+@click.pass_context
+def group_stop(ctx, group_name):
+    """Halt every moving cover in GROUP_NAME with one Zigbee groupcast."""
+    try:
+        payload = devices_core.cover_payload(action="STOP")
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_cover_emit(ctx, group_name, payload)
+
+
+@group.command("position")
+@click.argument("group_name")
+@click.argument("pct", type=int)
+@click.pass_context
+def group_position(ctx, group_name, pct):
+    """Set every cover's position in GROUP_NAME (0-100; 0 closed, 100 open)."""
+    try:
+        payload = devices_core.cover_payload(position=pct)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_cover_emit(ctx, group_name, payload)
+
+
+@group.command("tilt")
+@click.argument("group_name")
+@click.argument("pct", type=int)
+@click.pass_context
+def group_tilt(ctx, group_name, pct):
+    """Set every cover's tilt angle in GROUP_NAME (0-100, as tilt_position)."""
+    try:
+        payload = devices_core.cover_payload(tilt=pct)
+    except ValueError as exc:
+        _abort(str(exc))
+        return
+    _group_cover_emit(ctx, group_name, payload)
 
 
 # ──────────────────────────────────────────────────────── scenes

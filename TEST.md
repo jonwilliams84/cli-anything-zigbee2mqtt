@@ -29,6 +29,30 @@ This is exactly the CI gate; it must exit 0 before merge.
 | `test_repl_skin.py` | REPL prompt/parsing helpers |
 | `test_b101_regression.py`, `test_b105_regression.py`, `test_security_regression.py` | Regression locks: no `time.time()` misuse, shell-safety, callback exceptions logged |
 
+## Latest run (refine pass 8 / v0.15.0, 2026-11-15)
+
+- **1240 passed, 0 failed** (50 new: 26 unit + 24 E2E/workflow)
+- Coverage: gate green (`--cov-fail-under=80`)
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **cover convenience layer** — `device open` / `close` /
+  `stop` / `position` / `tilt` and the `group` groupcast twins, mirroring the
+  lighting convenience layer for window coverings (blinds, curtains, shades).
+  Core functions `check_percentage` / `cover_payload` / `set_cover` in
+  `core/devices.py` and `set_group_cover` in `core/groups.py`. `open`/`close`/
+  `stop` publish `{"state": "OPEN" | "CLOSE" | "STOP"}` to
+  `<base>/<name>/set`, `position` publishes `{"position": N}` (0 = fully
+  closed, 100 = fully open) and `tilt` publishes the `tilt_position` property
+  the cover exposes list uses. Payloads are validated before any MQTT
+  connection (position/tilt must be 0-100, exactly one of action/position/
+  tilt), IEEE addresses are resolved to friendly names first, unknown devices
+  abort without publishing, and the group twins resolve the group against the
+  retained `bridge/groups` inventory first so a device sharing the group's
+  name is never hit. New tests: `test_core.py` — `TestCheckPercentage`,
+  `TestCoverPayload`, `TestSetCover`, `TestSetGroupCover`;
+  `test_full_e2e.py` — `TestCoverCommands`, `TestGroupCoverCommands`,
+  `TestCoverWorkflows` (find-cover → position it → `device state` read-back,
+  group close → group stop, unknown-group-with-device-name abort).
+
 ## Latest run (refine pass 2, 2026-09-06)
 
 - 815 passed, 0 failed
