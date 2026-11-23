@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented here.
 
+## [0.16.0] — 2026-11-23
+
+- **Pairing / join-event workflow (`network watch-join`, `network await-join`)**:
+  `network permit-join` has been typed since the first release, but nothing in
+  the harness *answered* the one question every pairing session asks — "did my
+  new device show up yet?". Until now that meant reading the raw
+  `bridge watch-events` firehose (OTA progress, removals, notifications and
+  all) or scripting `mqtt watch` yourself. The `network` group now carries the
+  other half of the pairing workflow.
+  - `network watch-join [--duration S]` — tails `bridge/event` and prints every
+    pairing event as it arrives: `device_joined`, `device_announce` (a device
+    re-announcing, e.g. after a reset or a second pairing attempt) and
+    `device_interview_failed` (device too far away, or a model z2m can't talk
+    to). Everything else is filtered out — `bridge watch-events` remains the
+    full stream. `--json` emits the collected rows as one JSON array.
+  - `network await-join [--timeout S]` — blocks until the *first* join event,
+    then returns it; timeout exits 1 with
+    `error: no device joined within N s (is permit-join open?)`.
+    `device_interview_failed` also ends the wait — it *is* a pairing outcome,
+    so a script never hangs to the whole timeout on a broken pair; it branches
+    on the returned `event` key instead.
+  - `network await-join --permit [--time S]` — the whole ritual in one command:
+    `permit_join` is sent first (its z2m response echoed under the
+    `permit_join` key in `--json`), then the wait happens on the same broker
+    connection.
+  - Both commands enrich the result from the retained `bridge/devices`
+    inventory — `model`, `vendor`, `description` (and `inventory_friendly_name`
+    when z2m renamed the device right after joining) — a local read that costs
+    no round trip and does not wake a device that is still mid-interview.
+  - Why it matters: pairing is the most common z2m operation after
+    on/off, and it now runs as `network await-join --permit` →
+    `device show <ieee>` without a single raw-bridge-event decode, and works
+    in gate scripts because `--json` and the exit-1 timeout follow the same
+    contract as every other command.
+- Core functions in `core/admin.py`: client-free `JOIN_EVENT_TYPES`,
+  `classify_join_event`, `summarize_joins`; transport-backed `watch_joins`,
+  `await_join` (raises `MqttError` on timeout — same contract as every other
+  wait in the harness), `enrich_join`, and the `pair_step` composition behind
+  `--permit`. No existing network code paths changed.
+- 40 new tests (28 unit + 12 E2E/workflow), suite at 1280 passed. Documentation
+  updated in README.md, both SKILL.md copies, the package README, CLAUDE.md and
+  TEST.md.
+
 ## [0.15.0] — 2026-11-15
 
 - **Cover convenience layer (`device open/close/stop/position/tilt` + group

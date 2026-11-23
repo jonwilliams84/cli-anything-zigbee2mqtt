@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
 import time
 from typing import Optional
 
@@ -12,6 +14,8 @@ from cli_anything.zigbee2mqtt.core.devices import (
     parse_availability,
 )
 from cli_anything.zigbee2mqtt.core.mqtt_client import BridgeClient, MqttError
+
+logger = logging.getLogger(__name__)
 
 
 def permit_join(
@@ -325,3 +329,201 @@ def network_stats(
         "linkquality": linkquality_overview(states),
         "window_secs": duration,
     }
+
+
+# ── pairing / join events (v0.16.0 refine) ─────────────────────────────────
+#
+# z2m publishes every step of the pairing flow on the ``bridge/event`` topic
+# as JSON objects with a ``type`` discriminator:
+#
+#     {"type": "device_joined",           "data": {"friendly_name": "0x1234...",
+#                                                  "ieee_address": "0x1234..."}}
+#     {"type": "device_announce",         "data": {...same shape...}}
+#     {"type": "device_interview_failed", "data": {...same shape...}}
+#
+# ``permit-join`` already has a typed command; what the harness was missing
+# was the other half of the workflow — something that *answers* "did my new
+# device show up?". :func:`watch_joins` streams join events;
+# :func:`await_join` blocks for the first one and is scriptable
+# (exit 1 on timeout via ``MqttError``); :func:`enrich_join` joins the
+# newly-seen device against the retained ``bridge/devices`` inventory so a
+# one-shot pairing report carries model/vendor without an extra round trip.
+
+JOIN_EVENT_TYPES = frozenset({"device_joined", "device_announce", "device_interview_failed"})
+
+
+def classify_join_event(data) -> Optional[dict]:
+    """Normalize one parsed ``bridge/event`` payload into a join row (or None).
+
+    Non-join events (OTA progress, device_removed, notifications) return
+    ``None`` so callers can filter without re-listing event types. Malformed
+    payloads that are not dicts also return ``None``.
+
+    Row shape: ``{"event", "friendly_name", "ieee_address"}`` — keys are None
+    when z2m's payload omits them.
+    """
+    if not isinstance(data, dict):
+        return None
+    event = data.get("type")
+    if event not in JOIN_EVENT_TYPES:
+        return None
+    body = data.get("data")
+    body = body if isinstance(body, dict) else {}
+    friendly = body.get("friendly_name") or body.get("name")
+    ieee = body.get("ieee_address") or body.get("ieeepa_address")
+    return {
+        "event": event,
+        "friendly_name": friendly if isinstance(friendly, (str, int)) else None,
+        "ieee_address": ieee if isinstance(ieee, (str, int)) else None,
+    }
+
+
+def summarize_joins(events: list) -> list[dict]:
+    """Filter a list of parsed ``bridge/event`` payloads down to join rows.
+
+    Pure local filter (client-free) — arrival order preserved, non-join or
+    malformed entries dropped.
+    """
+    rows: list[dict] = []
+    for data in events:
+        row = classify_join_event(data)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def watch_joins(
+    client: BridgeClient,
+    *,
+    duration: Optional[float] = None,
+    callback=None,
+) -> list[dict]:
+    """Collect join events for `duration` seconds (None = until Ctrl-C).
+
+    Returns the normalized rows (:func:`classify_join_event` shape) in
+    arrival order. When `callback` is given it is called with each row as it
+    arrives (live printing for the human path); callback errors are logged,
+    never raised.
+    """
+    collected: list[dict] = []
+
+    def _cb(_topic: str, payload: str) -> None:
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        row = classify_join_event(data)
+        if row is None:
+            return
+        collected.append(row)
+        if callback:
+            try:
+                callback(row)
+            except Exception as exc:  # noqa: BLE001 — must not break the tail loop
+                logger.warning("watch_joins callback raised: %s", exc, exc_info=True)
+
+    client.subscribe(f"{client.base_topic}/bridge/event", _cb)
+    end = (time.time() + duration) if duration is not None else None
+    try:
+        while end is None or time.time() < end:
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        pass
+    return collected
+
+
+def await_join(client: BridgeClient, *, timeout: float = 60.0) -> dict:
+    """Block until the first join event, then return it (as a classified row).
+
+    Any of ``device_joined`` / ``device_announce`` /
+    ``device_interview_failed`` ends the wait — scripts should branch on the
+    returned ``event`` key; interview failures are a real pairing outcome and
+    silently hanging to the timeout would hide them.
+
+    Raises ``MqttError`` after `timeout` seconds with no join — the CLI turns
+    that into ``error: ...`` with exit 1 (the same contract every timeout in
+    this harness uses).
+    """
+    done = threading.Event()
+    slot: dict = {}
+
+    def _cb(_topic: str, payload: str) -> None:
+        if done.is_set():
+            return
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        row = classify_join_event(data)
+        if row is None:
+            return
+        slot["event"] = row
+        done.set()
+
+    client.subscribe(f"{client.base_topic}/bridge/event", _cb)
+    if not done.wait(timeout=timeout):
+        raise MqttError(f"no device joined within {timeout} s (is permit-join open?)")
+    return slot["event"]
+
+
+def enrich_join(
+    client: BridgeClient,
+    event: dict,
+    *,
+    timeout: float = 3.0,
+) -> dict:
+    """Add model/vendor/description for a joined device from the inventory.
+
+    The retained ``bridge/devices`` payload is a local read — no round trip
+    and no device wake-up, which matters because the device that just joined
+    is often mid-interview. Matches on IEEE address (case-insensitive) or
+    friendly_name. Returns a copy of `event`; ``model`` / ``vendor`` /
+    ``description`` keys are added only when the device is found.
+    """
+    row = dict(event)
+    ident = row.get("ieee_address") or row.get("friendly_name")
+    if not ident:
+        return row
+    for dev in list_devices(client, timeout=timeout):
+        if not isinstance(dev, dict):
+            continue
+        ieee = str(dev.get("ieee_address") or "").lower()
+        name = dev.get("friendly_name")
+        if ieee != str(ident).lower() and name != ident:
+            continue
+        definition = dev.get("definition") or {}
+        if isinstance(definition, dict):
+            if definition.get("model"):
+                row["model"] = definition.get("model")
+            if definition.get("vendor"):
+                row["vendor"] = definition.get("vendor")
+            if definition.get("description"):
+                row["description"] = definition.get("description")
+        if name and name != row.get("friendly_name"):
+            # z2m renamed after first join (interview assigns a real name)
+            row["inventory_friendly_name"] = name
+        break
+    return row
+
+
+def pair_step(
+    client: BridgeClient,
+    *,
+    permit: bool = False,
+    permit_time: int = 254,
+    timeout: float = 60.0,
+) -> dict:
+    """One pairing round-trip: optionally open permit-join, then await a join.
+
+    The one-flag composition of the v0.15.0 pairing workflow:
+    ``pair_step(permit=True)`` is ``permit_join`` immediately followed by
+    ``await_join`` — the broker connection is only ever opened once.
+    Returns ``{...event row, "permit_join": <z2m response>}``; the
+    ``permit_join`` key is present only when `permit` is True.
+    """
+    result: dict = {}
+    if permit:
+        response = permit_join(client, value=True, time_secs=permit_time)
+        result["permit_join"] = response
+    result.update(await_join(client, timeout=timeout))
+    return result

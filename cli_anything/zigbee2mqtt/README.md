@@ -75,6 +75,11 @@ cli-anything-zigbee2mqtt bridge request my_extension/do_thing -F value=1
 # Open the network for 60 seconds (pair a new device)
 cli-anything-zigbee2mqtt network permit-join on --time 60
 
+# ...or open it and wait for the new device in one round trip (v0.16.0)
+cli-anything-zigbee2mqtt --json network await-join --permit --timeout 120
+# stream every join event while pairing:
+cli-anything-zigbee2mqtt network watch-join --duration 120
+
 # Network map (graphviz DOT, ready to render with `dot -Tpng`)
 cli-anything-zigbee2mqtt --json network map --type graphviz
 
@@ -105,7 +110,7 @@ cli-anything-zigbee2mqtt converter remove my-override.js
 | `group` | list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp / open / close / stop / position / tilt |
 | `scene` | list / store / recall / add / rename / remove / remove-all (Zigbee scenes on a device or group) |
 | `ota` | check / update / schedule / unschedule (`check --all` sweeps the network) |
-| `network` | permit-join / map / touchlink-* / coordinator-check / backup |
+| `network` | permit-join / map / touchlink-* / coordinator-check / backup / stats — plus `watch-join` / `await-join` (v0.16.0): stream or block for the join events of the pairing workflow |
 | `converter` | list / show / add / remove (external_converters via kubectl) |
 | `config` | show / save |
 | `repl` | Interactive shell (default if no subcommand) |
@@ -130,6 +135,7 @@ cli_anything/zigbee2mqtt/
 │   ├── ota.py              # OTA check / update / schedule / unschedule
 │   │                       # + check_all (whole-network firmware sweep)
 │   ├── admin.py            # permit-join / map / touchlink / coordinator / backup
+│   │                       # + network stats + join events (watch_joins / await_join / enrich_join)
 │   ├── converters.py       # external_converters/ file mgmt (uses k8s_backend)
 │   ├── k8s_backend.py      # kubectl helpers
 │   └── project.py          # local connection profile

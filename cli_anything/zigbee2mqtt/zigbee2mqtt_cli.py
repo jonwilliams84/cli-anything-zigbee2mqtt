@@ -2279,6 +2279,85 @@ def network_stats_cmd(ctx, duration, below):
             _abort(str(exc))
 
 
+@network_grp.command("watch-join")
+@click.option(
+    "--duration",
+    default=60.0,
+    type=float,
+    show_default=True,
+    help="Seconds to listen (a device can take ~90 s to join after permit-join).",
+)
+@click.pass_context
+def network_watch_join(ctx, duration):
+    """Stream join events (device_joined / device_announce / interview failed).
+
+    The other half of the pairing workflow: `network permit-join on` opens
+    the network, this reports what comes through the door. Non-join events
+    (OTA progress, removals) are filtered out — use `bridge watch-events`
+    for the full firehose.
+    """
+    with make_client(ctx) as c:
+        if ctx.obj.get("as_json"):
+            emit(ctx, admin.watch_joins(c, duration=duration))
+            return
+
+        def _print(row: dict) -> None:
+            name = row.get("friendly_name") or "-"
+            ieee = row.get("ieee_address") or "-"
+            suffix = ""
+            if row.get("event") == "device_interview_failed":
+                suffix = " (interview failed — device too far or unsupported)"
+            click.echo(f"{row['event']}: {name} ({ieee}){suffix}")
+
+        admin.watch_joins(c, duration=duration, callback=_print)
+
+
+@network_grp.command("await-join")
+@click.option(
+    "--timeout",
+    "timeout_secs",
+    default=60.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for the first join event (exit 1 on timeout).",
+)
+@click.option(
+    "--permit",
+    is_flag=True,
+    default=False,
+    help="Open permit-join first, then wait — one round trip, one flag.",
+)
+@click.option(
+    "--time",
+    "permit_time",
+    default=254,
+    type=int,
+    help="Seconds permit-join stays open when --permit is given (max 254).",
+)
+@click.pass_context
+def network_await_join(ctx, timeout_secs, permit, permit_time):
+    """Wait until a new device joins, announce, or fails its interview.
+
+    Returns as soon as the first join event arrives on `bridge/event` —
+    `device_interview_failed` also returns (it *is* a pairing outcome), so
+    scripts never hang to the full timeout on a broken pair. The result is
+    enriched from the retained `bridge/devices` inventory (model / vendor)
+    when the device is there yet.
+
+    With `--permit` this is the whole pairing ritual in one command:
+    open the network and block until something walks in.
+    """
+    with make_client(ctx) as c:
+        try:
+            result = admin.pair_step(
+                c, permit=permit, permit_time=permit_time, timeout=timeout_secs
+            )
+            result = admin.enrich_join(c, result)
+        except MqttError as exc:
+            _abort(str(exc))
+    emit(ctx, result)
+
+
 # ──────────────────────────────────────────────────────── converters
 
 
