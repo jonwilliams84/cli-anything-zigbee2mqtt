@@ -45,7 +45,7 @@ overrides also work: `CLI_Z2M_MQTT_HOST`, `CLI_Z2M_BASE_TOPIC`, etc.
 | `group` | `list / members / add / remove / rename / add-member / remove-member / remove-all / options / set / get / state / on / off / toggle / brightness / color / color-temp / open / close / stop / position / tilt` — the first six after `state` are lighting groupcasts (v0.10.0), the last five cover groupcasts (v0.15.0) |
 | `scene` | `list / store / recall / add / rename / remove / remove-all` — Zigbee scenes on a device or group |
 | `ota` | `check [name \| --all] / update / abort / schedule / unschedule` — `check --all` sweeps the whole network for pending firmware; `--downgrade` works on `check` / `update` / `schedule` for firmware rollback, `abort` stops a running transfer |
-| `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup / stats` — `stats` is the one-shot fleet health summary (v0.12.0) |
+| `network` | `permit-join on/off / map / touchlink-* / coordinator-check / backup / stats / watch-join / await-join` — `stats` is the one-shot fleet health summary (v0.12.0); `watch-join` / `await-join` (v0.16.0) answer "did my new device join?" |
 | `install-code` | `add / remove` — pre-register codes for join-protected devices (Bosch, certain Aqara) |
 | `converter` | `list / show / add / remove / save` — `save` pushes a converter through the MQTT bridge API (saved **and** hot-loaded, no restart, no kubectl); `list / show / remove` also have `--via-mqtt` variants against the bridge's retained inventory |
 | `extension` | `list / show / save / remove` — z2m extensions (deeper than converters); managed entirely over MQTT (same bridge API the `converter` save path uses) |
@@ -145,6 +145,9 @@ cli-anything-zigbee2mqtt device write 'Lounge Lamp' --cluster genOnOff onOff=1 \
 
 # Open the network for 60 seconds (pair a new device)
 cli-anything-zigbee2mqtt network permit-join on --time 60
+
+# Open the network and wait for the new device — one command, one round trip
+cli-anything-zigbee2mqtt --json network await-join --permit --timeout 120
 
 # Whole-network health in one shot (devices, availability, battery, LQI)
 cli-anything-zigbee2mqtt --json network stats
@@ -385,6 +388,45 @@ count of `status == "low"` rows in `device battery`. Gate scripts can check
 one number and hand off to the row-level command for detail. As everywhere
 else in this harness, `--json` emits the full report as JSON; plain mode
 prints each top-level block as `key: value` / `key: {…}` lines.
+
+### Pairing workflow: watch-join / await-join (v0.16.0)
+
+`network permit-join` opens the network, but until now the only way to learn
+that a device actually joined was the raw `bridge watch-events` firehose.
+The `network` group now carries the other half of the pairing workflow:
+
+```bash
+cli-anything-zigbee2mqtt network watch-join --duration 120      # stream join events
+cli-anything-zigbee2mqtt --json network await-join --timeout 60 # block for the first one
+cli-anything-zigbee2mqtt --json network await-join --permit     # open + wait in one round trip
+```
+
+* `network watch-join [--duration S]` — tails `bridge/event` and passes every
+  join event straight to stdout as it arrives. Only pairing events are shown:
+  `device_joined`, `device_announce` (a device re-announcing, e.g. after a
+  reset or a second pairing attempt) and `device_interview_failed` (device too
+  far away or not supported). OTA progress, removals and notifications are
+  filtered out — use `bridge watch-events` for the full stream. `--duration`
+  defaults to 60 s; the human path prints live, `--json` emits the collected
+  rows as one JSON array (each row: `event`, `friendly_name`, `ieee_address`).
+* `network await-join [--timeout S]` — blocks until the *first* join event,
+  then exits. `device_interview_failed` also ends the wait: it *is* a pairing
+  outcome, so a script never hangs to the whole timeout on a broken pair —
+  branch on the returned `event` key instead. The result is enriched from the
+  retained `bridge/devices` inventory (add `--json` to get `model` / `vendor`
+  / `description` alongside the row), which costs no round trip and does not
+  wake the device that is still mid-interview. Timeout exits 1 with
+  `error: no device joined within N s (is permit-join open?)`.
+* `network await-join --permit [--time S]` — the whole ritual in one command:
+  `permit_join` is sent first, then the join wait happens on the same broker
+  connection; the z2m `permit_join` response is echoed in the output
+  (`permit_join` key under `--json`).
+
+Both commands follow the harness contract: row filtering and normalization
+(`JOIN_EVENT_TYPES`, `classify_join_event`, `summarize_joins`) is client-free
+and unit-tested, `--json` is gate-scriptable, and the composition with the
+existing surface is deliberate — `network permit-join` / `install-code add`,
+then `await-join`, then `device show <ieee>` for exposes and controls.
 
 ### Raw bridge requests: the escape hatch (v0.14.0)
 

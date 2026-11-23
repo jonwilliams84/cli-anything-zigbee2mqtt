@@ -4638,3 +4638,347 @@ class TestSetGroupCover:
         payload = devices_core.cover_payload(tilt=25)
         result = groups_core.set_group_cover(c, "Hallway", payload)
         assert result["published"] == {"tilt_position": 25}
+
+
+# ── pairing / join events (v0.16.0 refine) ───────────────────────────────────
+
+
+class FakeJoinClient(FakeBridgeClientForStats):
+    """Stats fake that also replays seeded bridge/event payloads at subscribe
+    time, the way a real broker delivers an event stream to a fresh
+    subscription."""
+
+    def add_event(self, payload: str) -> None:
+        self._retained.setdefault("_events", "")
+        events = self._retained.get("_events", "")
+        self._retained["_events"] = events + payload + "\n" if events else payload + "\n"
+
+    def subscribe(self, filter_: str, callback) -> None:
+        # replay retained topics (stats behaviour) plus stored event payloads
+        if "event" in filter_:
+            for payload in (self._retained.get("_events", "") or "").splitlines():
+                if payload:
+                    callback("zigbee2mqtt/bridge/event", payload)
+            return
+        super().subscribe(filter_, callback)
+
+
+def _join_payload(event: str, friendly: str = "0x1234", ieee: str = "0x1234") -> str:
+    import json as _json
+
+    return _json.dumps({"type": event, "data": {"friendly_name": friendly, "ieee_address": ieee}})
+
+
+class TestClassifyJoinEvent:
+    def test_joined(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.classify_join_event(
+            {"type": "device_joined", "data": {"friendly_name": "0xab", "ieee_address": "0xab"}}
+        )
+        if row != {"event": "device_joined", "friendly_name": "0xab", "ieee_address": "0xab"}:
+            raise AssertionError(f"unexpected row {row!r}")
+
+    def test_announce_and_interview_failed(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        for event in ("device_announce", "device_interview_failed"):
+            row = admin_core.classify_join_event(
+                {"type": event, "data": {"friendly_name": "n", "ieee_address": "0x1"}}
+            )
+            if row["event"] != event:
+                raise AssertionError(f"expected {event}, got {row!r}")
+
+    def test_non_join_events_are_ignored(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        for payload in (
+            {"type": "device_removed", "data": {}},
+            {"type": "ota_progress", "data": {}},
+            {"type": "update"},
+        ):
+            if admin_core.classify_join_event(payload) is not None:
+                raise AssertionError(f"non-join event classified: {payload!r}")
+
+    def test_non_dict_returns_none(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        if admin_core.classify_join_event("junk") is not None:
+            raise AssertionError("string payload should be ignored")
+        if admin_core.classify_join_event(None) is not None:
+            raise AssertionError("None payload should be ignored")
+        if admin_core.classify_join_event(["device_joined"]) is not None:
+            raise AssertionError("list payload should be ignored")
+
+    def test_missing_data_block_yields_nones(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.classify_join_event({"type": "device_joined"})
+        if row["friendly_name"] is not None or row["ieee_address"] is not None:
+            raise AssertionError(f"expected None ids, got {row!r}")
+
+    def test_data_not_a_dict_tolerated(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.classify_join_event({"type": "device_joined", "data": "x"})
+        if row["event"] != "device_joined":
+            raise AssertionError(f"unexpected row {row!r}")
+
+    def test_alternative_payload_keys(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.classify_join_event(
+            {"type": "device_announce", "data": {"name": "n", "ieeepa_address": "0xf"}}
+        )
+        if row["friendly_name"] != "n" or row["ieee_address"] != "0xf":
+            raise AssertionError(f"fallback keys not honored: {row!r}")
+
+
+class TestSummarizeJoins:
+    def test_filters_and_preserves_order(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        events = [
+            {"type": "ota_progress", "data": {}},
+            {"type": "device_joined", "data": {"friendly_name": "a", "ieee_address": "0xa"}},
+            {"type": "device_removed", "data": {}},
+            {"type": "device_announce", "data": {"friendly_name": "b", "ieee_address": "0xb"}},
+        ]
+        rows = admin_core.summarize_joins(events)
+        if [r["event"] for r in rows] != ["device_joined", "device_announce"]:
+            raise AssertionError(f"unexpected rows {rows!r}")
+
+    def test_empty_list(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        if admin_core.summarize_joins([]) != []:
+            raise AssertionError("empty input must give empty output")
+
+    def test_malformed_entries_dropped(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        rows = admin_core.summarize_joins([None, "x", {"type": "device_announce"}])
+        if len(rows) != 1 or rows[0]["event"] != "device_announce":
+            raise AssertionError(f"unexpected rows {rows!r}")
+
+
+class TestWatchJoins:
+    def test_replayed_events_collected(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        client = FakeJoinClient()
+        client.add_event(_join_payload("device_joined", "lamp", "0x1"))
+        client.add_event(_join_payload("device_announce", "lamp", "0x1"))
+        rows = admin_core.watch_joins(client, duration=0.1)
+        if [r["event"] for r in rows] != ["device_joined", "device_announce"]:
+            raise AssertionError(f"unexpected rows {rows!r}")
+        if rows[0]["friendly_name"] != "lamp":
+            raise AssertionError(f"unexpected row {rows[0]!r}")
+
+    def test_non_events_ignored(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        client = FakeJoinClient()
+        client.add_event('{"type": "device_removed", "data": {}}')
+        client.add_event("not json {{{")
+        rows = admin_core.watch_joins(client, duration=0.1)
+        if rows != []:
+            raise AssertionError(f"unexpected rows {rows!r}")
+
+    def test_callback_receives_rows_and_errors_are_logged(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        client = FakeJoinClient()
+        client.add_event(_join_payload("device_joined", "lamp", "0x1"))
+        seen: list[dict] = []
+
+        def boom(_row):
+            seen.append(_row)
+            raise RuntimeError("boom")
+
+        rows = admin_core.watch_joins(client, duration=0.1, callback=boom)
+        if len(rows) != 1 or len(seen) != 1:
+            raise AssertionError(f"callback not invoked: rows={rows!r} seen={seen!r}")
+
+    def test_subscribes_to_bridge_event_topic(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        topics: list[str] = []
+
+        class Spy(FakeJoinClient):
+            def subscribe(self, filter_, cb):
+                topics.append(filter_)
+                self._retained["_noop"] = ""
+
+        admin_core.watch_joins(Spy(), duration=0.05)
+        if topics != ["zigbee2mqtt/bridge/event"]:
+            raise AssertionError(f"unexpected subscription {topics!r}")
+
+
+class TestAwaitJoin:
+    def test_returns_first_event(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        client = FakeJoinClient()
+        client.add_event(_join_payload("device_joined", "first", "0x1"))
+        client.add_event(_join_payload("device_announce", "second", "0x2"))
+        row = admin_core.await_join(client, timeout=2.0)
+        if row["friendly_name"] != "first":
+            raise AssertionError(f"expected first event, got {row!r}")
+
+    def test_times_out_without_events(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        from cli_anything.zigbee2mqtt.core.mqtt_client import MqttError
+
+        with pytest.raises(MqttError, match="no device joined within 0.1 s"):
+            admin_core.await_join(FakeJoinClient(), timeout=0.1)
+
+    def test_non_join_events_do_not_end_the_wait(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        from cli_anything.zigbee2mqtt.core.mqtt_client import MqttError
+
+        client = FakeJoinClient()
+        client.add_event('{"type": "device_removed", "data": {}}')
+        with pytest.raises(MqttError):
+            admin_core.await_join(client, timeout=0.1)
+
+    def test_interview_failed_ends_the_wait(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        client = FakeJoinClient()
+        client.add_event(_join_payload("device_interview_failed", "ghost", "0x9"))
+        row = admin_core.await_join(client, timeout=2.0)
+        if row["event"] != "device_interview_failed" or row["friendly_name"] != "ghost":
+            raise AssertionError(f"unexpected row {row!r}")
+
+
+class TestEnrichJoin:
+    def _devices(self, extra: list[dict] | None = None) -> list[dict]:
+        dev = {
+            "ieee_address": "0x1234",
+            "friendly_name": "Living Floor Lamp",
+            "definition": {
+                "model": "ZB-LED",
+                "vendor": "Acme",
+                "description": "Dimmable floor lamp",
+            },
+            "type": "Router",
+        }
+        return [dev] + (extra or [])
+
+    def _client(self, devices: list[dict]) -> FakeJoinClient:
+        client = FakeJoinClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", json.dumps(devices))
+        return client
+
+    def test_enriches_from_retained_inventory(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.enrich_join(
+            self._client(self._devices()),
+            {"event": "device_joined", "friendly_name": "0x1234", "ieee_address": "0x1234"},
+        )
+        if row["model"] != "ZB-LED" or row["vendor"] != "Acme":
+            raise AssertionError(f"enrichment missing: {row!r}")
+        if row["description"] != "Dimmable floor lamp":
+            raise AssertionError(f"unexpected description {row!r}")
+
+    def test_ieee_match_case_insensitive(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.enrich_join(
+            self._client(self._devices()),
+            {"event": "device_announce", "friendly_name": "0X1234", "ieee_address": "0X1234"},
+        )
+        if row["model"] != "ZB-LED":
+            raise AssertionError(f"case-insensitive match failed: {row!r}")
+        if row["inventory_friendly_name"] != "Living Floor Lamp":
+            raise AssertionError(f"renamed device not reported: {row!r}")
+
+    def test_no_match_leaves_row_unchanged(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.enrich_join(
+            self._client(self._devices()),
+            {"event": "device_joined", "friendly_name": "x", "ieee_address": "0xdead"},
+        )
+        if "model" in row or "vendor" in row:
+            raise AssertionError(f"unexpected enrichment {row!r}")
+
+    def test_empty_inventory_tolerated(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        row = admin_core.enrich_join(
+            FakeJoinClient(),
+            {"event": "device_joined", "friendly_name": "x", "ieee_address": "0x1"},
+        )
+        if row["ieee_address"] != "0x1" or "model" in row:
+            raise AssertionError(f"unexpected row {row!r}")
+
+    def test_missing_identifier_unchanged(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        src = {"event": "device_announce"}
+        row = admin_core.enrich_join(FakeJoinClient(), src)
+        if row != src or row is src:
+            raise AssertionError("must return an unchanged copy, not the input")
+
+    def test_input_dict_not_mutated(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        src = {"event": "device_joined", "friendly_name": "0x1234", "ieee_address": "0x1234"}
+        admin_core.enrich_join(self._client(self._devices()), src)
+        if "model" in src:
+            raise AssertionError("input dict mutated")
+
+
+class TestPairStep:
+    def test_await_only_has_no_permit_key(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        client = FakeJoinClient()
+        client.add_event(_join_payload("device_joined", "lamp", "0x1"))
+        result = admin_core.pair_step(client, timeout=2.0)
+        if "permit_join" in result or result["friendly_name"] != "lamp":
+            raise AssertionError(f"unexpected result {result!r}")
+
+    def test_permit_composes_permit_join_and_await(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        client = FakeJoinClient()
+        client.set_response("permit_join", {"status": "ok", "data": {"time": 120}})
+        client.add_event(_join_payload("device_joined", "lamp", "0x1"))
+        result = admin_core.pair_step(client, permit=True, permit_time=120, timeout=2.0)
+        if result["permit_join"] != {"status": "ok", "data": {"time": 120}}:
+            raise AssertionError(f"permit response missing: {result!r}")
+        if result["friendly_name"] != "lamp":
+            raise AssertionError(f"event row missing: {result!r}")
+
+    def test_permit_time_passed_through(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        payloads: list[dict] = []
+
+        class Spy(FakeJoinClient):
+            def request(self, path, payload=None, *, timeout=15.0):
+                payloads.append(payload)
+                return {"status": "ok"}
+
+        client = Spy()
+        client.add_event(_join_payload("device_announce", "lamp", "0x2"))
+        admin_core.pair_step(client, permit=True, permit_time=90, timeout=2.0)
+        if payload := payloads[0]:
+            if payload["value"] is not True or payload["time"] != 90:
+                raise AssertionError(f"unexpected permit payload {payload!r}")
+        else:
+            raise AssertionError("no permit request captured")
+
+    def test_timeout_bubbles_up(self):
+        from cli_anything.zigbee2mqtt.core import admin as admin_core
+
+        from cli_anything.zigbee2mqtt.core.mqtt_client import MqttError
+
+        with pytest.raises(MqttError):
+            admin_core.pair_step(FakeJoinClient(), timeout=0.05)

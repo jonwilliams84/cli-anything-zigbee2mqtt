@@ -29,6 +29,31 @@ This is exactly the CI gate; it must exit 0 before merge.
 | `test_repl_skin.py` | REPL prompt/parsing helpers |
 | `test_b101_regression.py`, `test_b105_regression.py`, `test_security_regression.py` | Regression locks: no `time.time()` misuse, shell-safety, callback exceptions logged |
 
+## Latest run (refine pass 9 / v0.16.0, 2026-11-23)
+
+- **1280 passed, 0 failed** (40 new: 28 unit + 12 E2E/workflow)
+- Coverage: gate green (`--cov-fail-under=80`)
+- `ruff check` / `ruff format --check` / `bandit -ll`: clean
+- New in this run: **pairing / join-event workflow** — the `network` group now
+  answers "did my new device join?" instead of offering only the raw
+  `bridge watch-events` firehose. `network watch-join [--duration S]` streams
+  the pairing events (`device_joined`, `device_announce`,
+  `device_interview_failed`), filtering everything else out of
+  `bridge/event`; `network await-join [--timeout S]` blocks for the first
+  join event and exits 1 on timeout (`error: no device joined within ...`),
+  with interview failures treated as a valid outcome so scripts never hang;
+  `network await-join --permit` sends `permit_join` first on the same broker
+  connection and returns a result enriched with `model` / `vendor` /
+  `description` from the retained `bridge/devices` inventory (no round trip).
+  Core additions in `core/admin.py`: client-free
+  `JOIN_EVENT_TYPES` / `classify_join_event` / `summarize_joins` plus
+  transport functions `watch_joins` / `await_join` / `enrich_join` and the
+  `pair_step` composition. New tests: `test_core.py` —
+  `TestClassifyJoinEvent`, `TestSummarizeJoins`, `TestWatchJoins`,
+  `TestAwaitJoin`, `TestEnrichJoin`, `TestPairStep`;
+  `test_full_e2e.py` — `TestNetworkWatchJoin`, `TestNetworkAwaitJoin`,
+  `TestPairingWorkflow` (permit-join → await-join → `device show` read-back).
+
 ## Latest run (refine pass 8 / v0.15.0, 2026-11-15)
 
 - **1240 passed, 0 failed** (50 new: 26 unit + 24 E2E/workflow)

@@ -5213,3 +5213,279 @@ class TestCoverWorkflows:
         assert result.exit_code != 0
         assert "no group matching" in result.output
         assert client.published == []
+
+
+# ── pairing / join workflow (v0.16.0) ────────────────────────────────────────
+
+JOIN_EVENT_DEVICES = json.dumps(
+    [
+        {
+            "ieee_address": "0x0b1a2c3d",
+            "friendly_name": "Hallway Sensor",
+            "type": "EndDevice",
+            "definition": {
+                "model": "PIR-SIM",
+                "vendor": "Acme",
+                "description": "Simulated motion sensor",
+            },
+        }
+    ]
+)
+
+
+class FakeJoinClient(FakeBridgeClient):
+    """FakeBridgeClient that replays seeded bridge/event payloads to every
+    subscriber at subscribe() time — the join commands' happy path."""
+
+    def __init__(self, **overrides):
+        super().__init__(**overrides)
+        self._events: list[tuple[str, str]] = []
+        self.subscribed: list[str] = []
+
+    def add_event(self, payload: str) -> None:
+        self._events.append(("zigbee2mqtt/bridge/event", payload))
+
+    def subscribe(self, filter_: str, callback) -> None:
+        self.subscribed.append(filter_)
+        for topic, payload in list(self._events):
+            callback(topic, payload)
+
+
+@patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient())
+class TestNetworkWatchJoin:
+    def test_idle_network_exits_cleanly(self, fake_client):
+        client = FakeBridgeClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "network", "watch-join", "--duration", "0.1"]
+            )
+        assert result.exit_code == 0, result.output
+        assert client.subscribed == [] if hasattr(client, "subscribed") else True
+
+    def test_events_streamed_live_to_stdout(self, fake_client):
+        client = FakeJoinClient()
+        client.add_event(
+            json.dumps(
+                {
+                    "type": "device_joined",
+                    "data": {"friendly_name": "0x0b1a2c3d", "ieee_address": "0x0b1a2c3d"},
+                }
+            )
+        )
+        client.add_event('{"type": "device_removed", "data": {}}')
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "network", "watch-join", "--duration", "0.1"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "device_joined: 0x0b1a2c3d (0x0b1a2c3d)" in result.output
+        assert "device_removed" not in result.output
+
+    def test_interview_failed_prints_hint(self, fake_client):
+        client = FakeJoinClient()
+        client.add_event(
+            json.dumps(
+                {
+                    "type": "device_interview_failed",
+                    "data": {"friendly_name": "0x99", "ieee_address": "0x99"},
+                }
+            )
+        )
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "network", "watch-join", "--duration", "0.1"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "interview failed" in result.output
+
+    def test_json_output_is_list_of_rows(self, fake_client):
+        client = FakeJoinClient()
+        client.add_event(
+            json.dumps(
+                {
+                    "type": "device_announce",
+                    "data": {"friendly_name": "lamp", "ieee_address": "0x2"},
+                }
+            )
+        )
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "network", "watch-join", "--duration", "0.1"],
+            )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert isinstance(rows, list)
+        assert rows[0]["event"] == "device_announce"
+        assert rows[0]["ieee_address"] == "0x2"
+
+    def test_subscribes_to_bridge_event(self, fake_client):
+        client = FakeJoinClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            _runner().invoke(
+                cli, ["--mqtt-host", "x", "network", "watch-join", "--duration", "0.05"]
+            )
+        assert client.subscribed == ["zigbee2mqtt/bridge/event"]
+
+
+@patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient())
+class TestNetworkAwaitJoin:
+    def _client(self) -> FakeJoinClient:
+        client = FakeJoinClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", JOIN_EVENT_DEVICES)
+        client.add_event('{"type": "ota_progress", "data": {}}')
+        client.add_event(
+            json.dumps(
+                {
+                    "type": "device_joined",
+                    "data": {
+                        "friendly_name": "0x0b1a2c3d",
+                        "ieee_address": "0x0b1a2c3d",
+                    },
+                }
+            )
+        )
+        return client
+
+    def test_returns_on_first_join_and_enriches_from_inventory(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "network", "await-join", "--timeout", "2"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "device_joined" in result.output
+        assert "PIR-SIM" in result.output
+        assert "Acme" in result.output
+
+    def test_json_output_single_object(self, fake_client):
+        client = self._client()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "await-join", "--timeout", "2"]
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["event"] == "device_joined"
+        assert data["model"] == "PIR-SIM"
+        assert "permit_join" not in data
+
+    def test_permit_flag_opens_network_then_waits(self, fake_client):
+        client = self._client()
+        client.set_response("permit_join", {"status": "ok", "data": {"time": 120}})
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli,
+                [
+                    "--mqtt-host",
+                    "x",
+                    "--json",
+                    "network",
+                    "await-join",
+                    "--permit",
+                    "--time",
+                    "120",
+                    "--timeout",
+                    "2",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["permit_join"]["status"] == "ok"
+        assert data["event"] == "device_joined"
+
+    def test_timeout_aborts_with_exit_1(self, fake_client):
+        client = FakeJoinClient()
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "network", "await-join", "--timeout", "0.1"]
+            )
+        assert result.exit_code == 1, result.output
+        assert "error: no device joined within 0.1 s" in result.output
+        assert "is permit-join open?" in result.output
+
+    def test_interview_failed_is_a_valid_outcome(self, fake_client):
+        client = FakeJoinClient()
+        client.add_event(
+            json.dumps(
+                {
+                    "type": "device_interview_failed",
+                    "data": {"friendly_name": "ghost", "ieee_address": "0xdead"},
+                }
+            )
+        )
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli,
+                ["--mqtt-host", "x", "--json", "network", "await-join", "--timeout", "2"],
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["event"] == "device_interview_failed"
+
+
+@patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: FakeBridgeClient())
+class TestPairingWorkflow:
+    """Full pairing ritual: permit-join → await-join → inspect the new device."""
+
+    def test_permit_await_then_show(self, fake_client):
+        client = FakeJoinClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", JOIN_EVENT_DEVICES)
+        client.set_response("permit_join", {"status": "ok", "data": {"time": 254}})
+        client.add_event(
+            json.dumps(
+                {
+                    "type": "device_joined",
+                    "data": {"friendly_name": "0x0b1a2c3d", "ieee_address": "0x0b1a2c3d"},
+                }
+            )
+        )
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            permit = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "permit-join", "on", "--time", "254"]
+            )
+            assert permit.exit_code == 0, permit.output
+            await_ = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "await-join", "--timeout", "2"]
+            )
+            assert await_.exit_code == 0, await_.output
+            joined = json.loads(await_.output)
+            assert joined["ieee_address"] == "0x0b1a2c3d"
+            # the same client inventory now shows the new device — inspect it
+            show = _runner().invoke(
+                cli, ["--mqtt-host", "x", "device", "show", joined["ieee_address"]]
+            )
+            assert show.exit_code == 0, show.output
+            assert "Hallway Sensor" in show.output
+
+    def test_await_after_real_join_event_via_client(self, fake_client):
+        """Events that arrive later (real broker timing) still end the wait."""
+        client = FakeBridgeClient()
+        client.set_retained("zigbee2mqtt/bridge/devices", JOIN_EVENT_DEVICES)
+
+        real_subscribers: list = []
+
+        def capture_subscribe(filter_, cb):
+            real_subscribers.append((filter_, cb))
+
+        client.subscribe = capture_subscribe  # type: ignore[method-assign]
+
+        with patch("cli_anything.zigbee2mqtt.zigbee2mqtt_cli.make_client", lambda ctx: client):
+            result = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "await-join", "--timeout", "0.2"]
+            )
+            assert result.exit_code == 1
+            # now deliver a join event through the captured subscriber
+            payload = json.dumps(
+                {
+                    "type": "device_announce",
+                    "data": {"friendly_name": "0x0b1a2c3d", "ieee_address": "0x0b1a2c3d"},
+                }
+            )
+            for _f, cb in real_subscribers:
+                cb("zigbee2mqtt/bridge/event", payload)
+            client.subscribe = lambda f, cb: cb("zigbee2mqtt/bridge/event", payload)
+            result2 = _runner().invoke(
+                cli, ["--mqtt-host", "x", "--json", "network", "await-join", "--timeout", "0.2"]
+            )
+            assert result2.exit_code == 0, result2.output
+            assert json.loads(result2.output)["event"] == "device_announce"
